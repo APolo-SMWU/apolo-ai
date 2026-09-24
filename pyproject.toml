@@ -1,12 +1,15 @@
 [project]
 name = "apolo"
 version = "0.1.0"
-description = "APolo — 맞춤형 포트폴리오 구조 생성 LangGraph (create mode)"
+description = "APolo — Personal Knowledge Graph 기반 AI 서비스"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.115",
     "langgraph>=0.2",
     "pydantic>=2.7",
+    "python-dotenv>=1.2.2",
+    "uvicorn[standard]>=0.30",
 ]
 
 [dependency-groups]
