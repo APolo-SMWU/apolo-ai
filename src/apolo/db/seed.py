@@ -1,4 +1,4 @@
-"""Seed KG의 최초 저장과 조회. 기존 KG 갱신·중복 병합은 별도로 처리한다."""
+"""프로필 전용 Seed KG의 저장·조회·갱신."""
 
 import psycopg
 from psycopg.rows import tuple_row
@@ -85,53 +85,138 @@ def save_initial_seed(connection: psycopg.Connection, seed: SeedKnowledgeGraph) 
                 seed.updated_at,
             ),
         )
-        cursor.executemany(
-            "INSERT INTO ai.entities "
-            "(id, graph_id, class_type, status, created_at, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            [
-                (e.id, e.graph_id, e.class_type, e.status, e.created_at, e.updated_at)
-                for e in seed.entities
-            ],
+        _insert_seed_items(cursor, seed)
+
+
+def _insert_seed_items(cursor: psycopg.Cursor, seed: SeedKnowledgeGraph) -> None:
+    cursor.executemany(
+        "INSERT INTO ai.entities "
+        "(id, graph_id, class_type, status, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        [
+            (e.id, e.graph_id, e.class_type, e.status, e.created_at, e.updated_at)
+            for e in seed.entities
+        ],
+    )
+    cursor.executemany(
+        "INSERT INTO ai.facts "
+        "(id, entity_id, predicate, value, value_type, origin, confidence, locked, "
+        "status, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        [
+            (
+                f.id,
+                f.entity_id,
+                f.predicate,
+                Jsonb(f.value),
+                f.value_type,
+                f.origin,
+                f.confidence,
+                f.locked,
+                f.status,
+                f.updated_at,
+            )
+            for f in seed.facts
+        ],
+    )
+    cursor.executemany(
+        "INSERT INTO ai.relations "
+        "(id, graph_id, subject_entity_id, predicate, object_entity_id, origin, "
+        "confidence, locked, status, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        [
+            (
+                r.id,
+                r.graph_id,
+                r.subject_entity_id,
+                r.predicate,
+                r.object_entity_id,
+                r.origin,
+                r.confidence,
+                r.locked,
+                r.status,
+                r.updated_at,
+            )
+            for r in seed.relations
+        ],
+    )
+
+
+class SeedVersionConflictError(ValueError):
+    """읽은 이후 KG가 변경되었거나 삭제되어 갱신할 수 없다."""
+
+
+def update_profile_seed(
+    connection: psycopg.Connection,
+    existing: SeedKnowledgeGraph,
+    updated: SeedKnowledgeGraph,
+) -> None:
+    """갱신 규칙으로 만든 결과를 한 트랜잭션으로 반영한다. 프로필 전용 KG에 한정한다.
+
+    모든 KG 갱신자는 버전 확인/증가 규칙을 따라야 한다.
+    충돌 시 호출부가 최신 KG를 다시 읽고 갱신 결과를 계산해야 한다.
+    기존 트랜잭션 안에서는 최종 commit을 호출부가 담당한다.
+    """
+    for seed in (existing, updated):
+        issues = validate_seed_graph(seed)
+        if issues:
+            raise InvalidSeedGraphError(issues)
+    if (
+        updated.id != existing.id
+        or updated.user_id != existing.user_id
+        or updated.created_at != existing.created_at
+        or updated.ontology_schema_version != existing.ontology_schema_version
+        or updated.version != existing.version + 1
+        or updated.updated_at < existing.updated_at
+    ):
+        raise ValueError("KG 식별 정보는 유지하고 버전은 정확히 1 증가시켜야 합니다.")
+
+    old_entities = {e.id: e for e in existing.entities}
+    new_entities = {e.id: e for e in updated.entities}
+    old_facts = {f.id: f for f in existing.facts}
+    new_facts = {f.id: f for f in updated.facts}
+    old_relations = {r.id: r for r in existing.relations}
+    new_relations = {r.id: r for r in updated.relations}
+    # 변경된 Fact/Relation만 같은 ID로 다시 넣고, 변경 없는 행은 건드리지 않는다.
+    remove_facts = [key for key, item in old_facts.items() if new_facts.get(key) != item]
+    remove_relations = [
+        key for key, item in old_relations.items() if new_relations.get(key) != item
+    ]
+    additions = updated.model_copy(
+        update={
+            "entities": [e for e in updated.entities if e.id not in old_entities],
+            "facts": [f for f in updated.facts if old_facts.get(f.id) != f],
+            "relations": [r for r in updated.relations if old_relations.get(r.id) != r],
+        }
+    )
+
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE ai.knowledge_graphs SET version=%s, updated_at=%s "
+            "WHERE id=%s AND user_id=%s AND version=%s",
+            (updated.version, updated.updated_at, existing.id, existing.user_id, existing.version),
+        )
+        if cursor.rowcount != 1:
+            raise SeedVersionConflictError("KG가 변경되었습니다. 최신 KG를 다시 조회해 주세요.")
+        cursor.execute(
+            "DELETE FROM ai.relations WHERE graph_id=%s AND id=ANY(%s)",
+            (existing.id, remove_relations),
+        )
+        cursor.execute(
+            "DELETE FROM ai.facts f USING ai.entities e "
+            "WHERE f.entity_id=e.id AND e.graph_id=%s AND f.id=ANY(%s)",
+            (existing.id, remove_facts),
+        )
+        cursor.execute(
+            "DELETE FROM ai.entities WHERE graph_id=%s AND id=ANY(%s)",
+            (existing.id, list(old_entities.keys() - new_entities.keys())),
         )
         cursor.executemany(
-            "INSERT INTO ai.facts "
-            "(id, entity_id, predicate, value, value_type, origin, confidence, locked, "
-            "status, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "UPDATE ai.entities SET class_type=%s, status=%s, created_at=%s, updated_at=%s "
+            "WHERE id=%s AND graph_id=%s",
             [
-                (
-                    f.id,
-                    f.entity_id,
-                    f.predicate,
-                    Jsonb(f.value),
-                    f.value_type,
-                    f.origin,
-                    f.confidence,
-                    f.locked,
-                    f.status,
-                    f.updated_at,
-                )
-                for f in seed.facts
+                (e.class_type, e.status, e.created_at, e.updated_at, e.id, updated.id)
+                for e in updated.entities
+                if e.id in old_entities and old_entities[e.id] != e
             ],
         )
-        cursor.executemany(
-            "INSERT INTO ai.relations "
-            "(id, graph_id, subject_entity_id, predicate, object_entity_id, origin, "
-            "confidence, locked, status, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            [
-                (
-                    r.id,
-                    r.graph_id,
-                    r.subject_entity_id,
-                    r.predicate,
-                    r.object_entity_id,
-                    r.origin,
-                    r.confidence,
-                    r.locked,
-                    r.status,
-                    r.updated_at,
-                )
-                for r in seed.relations
-            ],
-        )
+        _insert_seed_items(cursor, additions)

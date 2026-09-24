@@ -1,4 +1,4 @@
-"""기존 변환·조회·저장 함수를 연결해 최초 입력은 저장하고 동일 입력은 재사용"""
+"""프로필의 최초 저장·동일 내용 재사용·변경 반영을 연결한다."""
 
 from datetime import datetime
 from uuid import uuid4
@@ -7,13 +7,9 @@ import psycopg
 
 from apolo.contracts.kg import SeedKnowledgeGraph
 from apolo.contracts.profile import SeedProfileInput
-from apolo.db.seed import load_seed_by_user_id, save_initial_seed
-from apolo.seed.comparison import same_profile_seed_content
+from apolo.db.seed import load_seed_by_user_id, save_initial_seed, update_profile_seed
 from apolo.seed.profile import build_initial_profile_seed
-
-
-class ProfileSeedUpdateRequiredError(ValueError):
-    """기존 KG와 달라 갱신이 필요한 입력. 변경 반영은 다음 구현 단계에서 처리한다."""
+from apolo.seed.update import build_updated_profile_seed
 
 
 def ensure_profile_seed(
@@ -21,7 +17,7 @@ def ensure_profile_seed(
 ) -> SeedKnowledgeGraph:
     """없으면 저장하고, 같은 내용이면 저장된 ID·시간·버전을 그대로 반환한다.
 
-    현재 프로필만으로 구성된 Seed KG 전용이다. 변경된 입력은 덮어쓰지 않는다.
+    현재 프로필만으로 구성된 Seed KG 전용이다. 최신 전체 프로필로 변경을 반영한다.
     PostgreSQL 기본 READ COMMITTED를 전제로 동시 최초 저장의 사용자 중복만 처리한다.
     기존 트랜잭션 안에서는 최종 commit을 호출부가 담당한다.
     """
@@ -41,6 +37,7 @@ def ensure_profile_seed(
             else:
                 return candidate
 
-        if not same_profile_seed_content(existing, candidate):
-            raise ProfileSeedUpdateRequiredError("프로필 내용이 달라 KG 갱신이 필요합니다.")
-        return existing
+        updated = build_updated_profile_seed(existing, source, now=now)
+        if updated.version != existing.version:
+            update_profile_seed(connection, existing, updated)
+        return updated
