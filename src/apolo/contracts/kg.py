@@ -5,8 +5,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-SeedClassType = Literal["Person", "Education", "Experience", "Organization", "Channel"]
-SeedRelationType = Literal["hasEducation", "hasExperience", "hasChannel", "atOrganization"]
+from apolo.ontology.seed import SeedClassType, SeedRelationType, SeedValueType
 
 
 class SeedEntity(BaseModel):
@@ -31,7 +30,7 @@ class SeedFact(BaseModel):
     entity_id: UUID
     predicate: str = Field(min_length=1)
     value: str
-    value_type: Literal["string", "uri"]
+    value_type: SeedValueType
     origin: Literal["user"] = "user"
     confidence: None = None
     locked: bool = False
