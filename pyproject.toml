@@ -1,0 +1,34 @@
+[project]
+name = "apolo"
+version = "0.1.0"
+description = "APolo — Personal Knowledge Graph 기반 AI 서비스"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "langgraph>=0.2",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic>=2.7",
+    "python-dotenv>=1.2.2",
+    "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/apolo"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
