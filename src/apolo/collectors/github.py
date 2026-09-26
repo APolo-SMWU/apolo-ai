@@ -10,11 +10,12 @@ import httpx    # GitHub API 요청
 
 from apolo.contracts.source import CollectedSource, EvidenceCandidate
 
-# 프로필당 Repository는 최대 20개, README는 표시된 크기 기준 200,000바이트로 제한
+# 프로필당 Repository는 최대 20개, README와 선택 파일은 크기 제한
 GITHUB_API_URL = "https://api.github.com"
 GITHUB_API_VERSION = "2026-03-10"
 MAX_PROFILE_REPOSITORIES = 20
 MAX_README_BYTES = 200_000
+MAX_SELECTED_FILE_BYTES = 100_000
 
 
 class GitHubCollectionError(RuntimeError):
@@ -23,7 +24,13 @@ class GitHubCollectionError(RuntimeError):
     def __init__(
         self,
         code: Literal[
-            "unsupported_url", "not_found", "rate_limited", "unavailable", "invalid_response"
+            "unsupported_url",
+            "not_found",
+            "rate_limited",
+            "unavailable",
+            "invalid_response",
+            "file_too_large",
+            "unsupported_content",
         ],
         message: str,
     ) -> None:
@@ -47,6 +54,37 @@ class GitHubCollectionResult:
 
     sources: list[CollectedSource]
     warnings: list[GitHubCollectionWarning]
+
+
+@dataclass(frozen=True)
+class GitHubTreeEntry:
+    """저장소 파일·폴더 경로"""
+
+    path: str
+    kind: Literal["file", "directory", "submodule"]
+    size: int | None
+    sha: str
+
+
+@dataclass(frozen=True)
+class GitHubRepositoryTree:
+    """기본 브랜치의 파일 목록과 완전성 정보"""
+
+    repository_url: str
+    branch: str
+    tree_sha: str
+    entries: list[GitHubTreeEntry]
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class GitHubRepositoryFile:
+    """선택한 저장소 텍스트 파일의 원문"""
+
+    repository_url: str
+    path: str
+    sha: str
+    content: str
 
 
 @dataclass(frozen=True)
@@ -125,6 +163,159 @@ async def collect_github_sources(
         except GitHubCollectionError as error:
             warnings.append(_warning_from_error(profile.source_url, error))
     return GitHubCollectionResult(sources=sources, warnings=warnings)
+
+
+async def collect_repository_tree(
+    repository_url: str, *, client: httpx.AsyncClient
+) -> GitHubRepositoryTree:
+    """Repository 기본 브랜치의 파일·폴더 경로 조회"""
+    target = _parse_target(repository_url)
+    if target.kind != "repository":
+        raise GitHubCollectionError("unsupported_url", "GitHub Repository URL이 필요합니다.")
+
+    repository = await _get_json(client, _target_path(target))
+    if not isinstance(repository, Mapping):
+        raise GitHubCollectionError(
+            "invalid_response", "GitHub Repository 응답 형식이 올바르지 않습니다."
+        )
+    try:
+        branch = _required_text(repository, "default_branch")
+        source_url = _required_text(repository, "html_url")
+    except ValueError as error:
+        raise GitHubCollectionError("invalid_response", str(error)) from error
+
+    tree = await _get_json(
+        client,
+        f"{_target_path(target)}/git/trees/{_path_segment(branch)}",
+        params={"recursive": 1},
+    )
+    return _normalize_repository_tree(source_url, branch, tree)
+
+
+async def collect_repository_file(
+    tree: GitHubRepositoryTree, path: str, *, client: httpx.AsyncClient
+) -> GitHubRepositoryFile:
+    """파일 목록에서 선택한 텍스트 파일 한 개 조회"""
+    entry = next((item for item in tree.entries if item.path == path), None)
+    if entry is None:
+        if tree.truncated:
+            raise GitHubCollectionError(
+                "invalid_response", "파일 목록이 일부만 반환되어 해당 경로를 확인할 수 없습니다."
+            )
+        raise GitHubCollectionError("not_found", "파일 목록에서 해당 경로를 찾지 못했습니다.")
+    if entry.kind != "file":
+        raise GitHubCollectionError("unsupported_content", "일반 파일만 읽을 수 있습니다.")
+    if entry.size is None:
+        raise GitHubCollectionError("invalid_response", "GitHub 파일 크기 정보가 없습니다.")
+    if entry.size > MAX_SELECTED_FILE_BYTES:
+        raise GitHubCollectionError(
+            "file_too_large", f"선택 파일은 {MAX_SELECTED_FILE_BYTES} bytes 이하만 수집합니다."
+        )
+
+    target = _parse_target(tree.repository_url)
+    if target.kind != "repository":
+        raise GitHubCollectionError("unsupported_url", "GitHub Repository URL이 필요합니다.")
+    payload = await _get_json(
+        client, f"{_target_path(target)}/git/blobs/{_path_segment(entry.sha)}"
+    )
+    content = _decode_repository_file(payload, entry)
+    return GitHubRepositoryFile(
+        repository_url=tree.repository_url,
+        path=entry.path,
+        sha=entry.sha,
+        content=content,
+    )
+
+
+def _decode_repository_file(payload: object, entry: GitHubTreeEntry) -> str:
+    """Git blob Base64 원문의 크기·형식 검증"""
+    if not isinstance(payload, Mapping):
+        raise GitHubCollectionError("invalid_response", "GitHub Blob 응답 형식이 올바르지 않습니다.")
+    size = payload.get("size")
+    encoded = payload.get("content")
+    if (
+        payload.get("sha") != entry.sha
+        or payload.get("encoding") != "base64"
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or size < 0
+        or not isinstance(encoded, str)
+    ):
+        raise GitHubCollectionError("invalid_response", "GitHub Blob 응답 형식이 올바르지 않습니다.")
+    if size > MAX_SELECTED_FILE_BYTES:
+        raise GitHubCollectionError(
+            "file_too_large", f"선택 파일은 {MAX_SELECTED_FILE_BYTES} bytes 이하만 수집합니다."
+        )
+    try:
+        decoded = base64.b64decode("".join(encoded.split()), validate=True)
+    except ValueError as error:
+        raise GitHubCollectionError("invalid_response", "GitHub Blob의 Base64가 올바르지 않습니다.") from error
+    if len(decoded) != size or len(decoded) != entry.size:
+        raise GitHubCollectionError("invalid_response", "GitHub Blob 크기가 파일 목록과 다릅니다.")
+    if any(byte < 32 and byte not in (9, 10, 13) for byte in decoded) or 127 in decoded:
+        raise GitHubCollectionError("unsupported_content", "바이너리 파일은 읽지 않습니다.")
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise GitHubCollectionError("unsupported_content", "UTF-8 텍스트 파일만 읽습니다.") from error
+
+
+def _normalize_repository_tree(
+    repository_url: str, branch: str, payload: object
+) -> GitHubRepositoryTree:
+    """Git Trees 응답의 경로·완전성 검증"""
+    if not isinstance(payload, Mapping):
+        raise GitHubCollectionError(
+            "invalid_response", "GitHub Tree 응답 형식이 올바르지 않습니다."
+        )
+    tree_sha = payload.get("sha")
+    raw_entries = payload.get("tree")
+    truncated = payload.get("truncated")
+    if (
+        not isinstance(tree_sha, str)
+        or not tree_sha.strip()
+        or not isinstance(raw_entries, list)
+        or not isinstance(truncated, bool)
+    ):
+        raise GitHubCollectionError(
+            "invalid_response", "GitHub Tree 응답 형식이 올바르지 않습니다."
+        )
+
+    kinds = {"blob": "file", "tree": "directory", "commit": "submodule"}
+    entries: list[GitHubTreeEntry] = []
+    for item in raw_entries:
+        if not isinstance(item, Mapping):
+            raise GitHubCollectionError(
+                "invalid_response", "GitHub Tree 항목 형식이 올바르지 않습니다."
+            )
+        path = item.get("path")
+        entry_type = item.get("type")
+        kind = kinds.get(entry_type) if isinstance(entry_type, str) else None
+        size = item.get("size")
+        sha = item.get("sha")
+        if (
+            not isinstance(path, str)
+            or not path.strip()
+            or kind is None
+            or not isinstance(sha, str)
+            or not sha.strip()
+            or (
+                size is not None
+                and (not isinstance(size, int) or isinstance(size, bool) or size < 0)
+            )
+        ):
+            raise GitHubCollectionError(
+                "invalid_response", "GitHub Tree 항목 형식이 올바르지 않습니다."
+            )
+        entries.append(GitHubTreeEntry(path=path, kind=kind, size=size, sha=sha))
+
+    return GitHubRepositoryTree(
+        repository_url=repository_url,
+        branch=branch,
+        tree_sha=tree_sha,
+        entries=entries,
+        truncated=truncated,
+    )
 
 
 def normalize_profile(payload: Mapping[str, Any]) -> CollectedSource:
