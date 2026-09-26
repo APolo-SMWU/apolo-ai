@@ -66,3 +66,15 @@ class ExtractionResult(_Candidate):
     entities: list[EntityCandidate] = Field(default_factory=list)
     facts: list[FactCandidate] = Field(default_factory=list)
     relations: list[RelationCandidate] = Field(default_factory=list)
+
+
+class StructuredExtractionResult(_Candidate):
+    """Structured Outputs 전용 응답 형식. 세 목록은 항상 명시한다."""
+
+    entities: list[EntityCandidate]
+    facts: list[FactCandidate]
+    relations: list[RelationCandidate]
+
+    def to_extraction_result(self) -> ExtractionResult:
+        """저장·검증 단계가 쓰는 기본 후보 모델로 변환"""
+        return ExtractionResult.model_validate(self.model_dump())
