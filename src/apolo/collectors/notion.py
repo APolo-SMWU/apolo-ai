@@ -17,7 +17,11 @@ NOTION_PAGE_ID_PATTERN = re.compile(
 MAX_NOTION_BLOCK_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_NOTION_BLOCK_CHUNKS = 20
 MAX_NOTION_SYNC_BATCHES = 20
+MAX_NOTION_CHILD_PAGES = 20
+MAX_NOTION_DATABASE_VIEWS = 20
+MAX_NOTION_DATABASE_ROWS = 50
 NOTION_SYNC_RECORDS_API_URL = "https://www.notion.so/api/v3/syncRecordValues"
+NOTION_QUERY_COLLECTION_API_URL = "https://www.notion.so/api/v3/queryCollection"
 
 
 class NotionCollectionError(ValueError):
@@ -54,6 +58,24 @@ class FetchedNotionBlocks:
 
     target: NotionPageTarget
     blocks: Mapping[str, Mapping[str, Any]]
+    space_id: str | None = None
+
+
+@dataclass(frozen=True)
+class NotionCollectionWarning:
+    """하위 페이지 부분 수집 실패 경고 정보"""
+
+    source_url: str
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class NotionCollectionResult:
+    """부모·직접 하위 페이지 수집 결과"""
+
+    sources: list[CollectedSource]
+    warnings: list[NotionCollectionWarning]
 
 
 @dataclass(frozen=True)
@@ -82,6 +104,15 @@ class _NotionHttpResponse:
     def is_error(self) -> bool:
         """HTTP 오류 여부"""
         return self.status_code >= 400
+
+
+@dataclass(frozen=True)
+class _NotionDatabaseRows:
+    """공개 데이터베이스 뷰의 항목·속성 스키마·추가 항목 여부"""
+
+    rows: list[tuple[str, Mapping[str, Any]]]
+    schema: Mapping[str, Mapping[str, Any]]
+    has_more: bool
 
 
 def parse_public_notion_url(source_url: str) -> NotionPageTarget:
@@ -126,16 +157,57 @@ async def fetch_public_notion_blocks(
             "invalid_response", "Notion Page 블록 페이지네이션 제한을 초과했습니다."
         )
 
-    await _fetch_missing_child_blocks(blocks, space_id, client=client)
-    return FetchedNotionBlocks(target=target, blocks=blocks)
+    await _fetch_missing_child_blocks(blocks, space_id, target.page_id, client=client)
+    return FetchedNotionBlocks(target=target, blocks=blocks, space_id=space_id)
 
 
-async def collect_notion_source(
-    source_url: str, *, client: httpx.AsyncClient
-) -> CollectedSource:
+async def collect_notion_source(source_url: str, *, client: httpx.AsyncClient) -> CollectedSource:
     """Public Notion URL의 공통 Source 변환"""
     fetched = await fetch_public_notion_blocks(source_url, client=client)
     return normalize_notion_blocks(fetched.target, fetched.blocks)
+
+
+async def collect_notion_sources(
+    source_url: str, *, client: httpx.AsyncClient
+) -> NotionCollectionResult:
+    """부모·직접 하위 페이지·공개 데이터베이스 항목 수집"""
+    fetched = await fetch_public_notion_blocks(source_url, client=client)
+    parent = normalize_notion_blocks(fetched.target, fetched.blocks)
+    child_page_ids = _direct_child_page_ids(fetched.target, fetched.blocks)
+    sources = [parent]
+    fetched_pages = [fetched]
+    warnings: list[NotionCollectionWarning] = []
+
+    if len(child_page_ids) > MAX_NOTION_CHILD_PAGES:
+        warnings.append(
+            NotionCollectionWarning(
+                source_url=parent.source_url,
+                code="subpage_limit",
+                message=f"직접 하위 페이지 {MAX_NOTION_CHILD_PAGES}개만 수집했습니다.",
+            )
+        )
+
+    for child_id in child_page_ids[:MAX_NOTION_CHILD_PAGES]:
+        child_url = f"https://{urlparse(parent.source_url).netloc}/{child_id}"
+        try:
+            child = await fetch_public_notion_blocks(child_url, client=client)
+            sources.append(normalize_notion_blocks(child.target, child.blocks))
+            fetched_pages.append(child)
+        except NotionCollectionError as error:
+            warnings.append(
+                NotionCollectionWarning(
+                    source_url=child_url,
+                    code=error.code,
+                    message=str(error),
+                )
+            )
+
+    database_sources, database_warnings = await _collect_database_sources(
+        fetched_pages, client=client
+    )
+    sources.extend(database_sources)
+    warnings.extend(database_warnings)
+    return NotionCollectionResult(sources=sources, warnings=warnings)
 
 
 def normalize_notion_blocks(
@@ -147,9 +219,7 @@ def normalize_notion_blocks(
     title = _block_plain_text(root) or "Untitled Notion Page"
 
     lines = [f"# {title}"]
-    evidence_candidates = [
-        EvidenceCandidate(snippet=title, locator=f"notion.block:{root_id}")
-    ]
+    evidence_candidates = [EvidenceCandidate(snippet=title, locator=f"notion.block:{root_id}")]
     for block_id, block in _walk_descendant_blocks(root_id, block_values):
         text = _block_plain_text(block)
         if not text:
@@ -170,6 +240,260 @@ def normalize_notion_blocks(
         content="\n\n".join(lines),
         evidence_candidates=evidence_candidates,
     )
+
+
+async def _collect_database_sources(
+    pages: list[FetchedNotionBlocks], *, client: httpx.AsyncClient
+) -> tuple[list[CollectedSource], list[NotionCollectionWarning]]:
+    """공개 데이터베이스 뷰의 항목을 별도 Source로 수집"""
+    sources: list[CollectedSource] = []
+    warnings: list[NotionCollectionWarning] = []
+    seen_views: set[str] = set()
+    seen_pages = {page.target.page_id for page in pages}
+    attempted_rows = 0
+
+    for page in pages:
+        for view_id, view_block in _direct_collection_views(page):
+            if view_id in seen_views:
+                continue
+            if len(seen_views) >= MAX_NOTION_DATABASE_VIEWS:
+                warnings.append(
+                    NotionCollectionWarning(
+                        page.target.source_url,
+                        "database_view_limit",
+                        "데이터베이스 뷰 수집 제한을 초과했습니다.",
+                    )
+                )
+                return sources, warnings
+            seen_views.add(view_id)
+            try:
+                rows = await _fetch_collection_rows(
+                    view_id, view_block, page.space_id, client=client
+                )
+            except NotionCollectionError as error:
+                warnings.append(
+                    NotionCollectionWarning(page.target.source_url, error.code, str(error))
+                )
+                continue
+
+            if rows.has_more:
+                warnings.append(
+                    NotionCollectionWarning(
+                        page.target.source_url,
+                        "database_partial",
+                        "데이터베이스 뷰에 추가 항목이 있습니다.",
+                    )
+                )
+
+            for row_id, row_block in rows.rows:
+                if row_id in seen_pages:
+                    continue
+                if attempted_rows >= MAX_NOTION_DATABASE_ROWS:
+                    warnings.append(
+                        NotionCollectionWarning(
+                            page.target.source_url,
+                            "database_row_limit",
+                            "데이터베이스 항목 수집 제한을 초과했습니다.",
+                        )
+                    )
+                    return sources, warnings
+                seen_pages.add(row_id)
+                attempted_rows += 1
+                row_url = f"https://{urlparse(page.target.source_url).netloc}/{row_id}"
+                try:
+                    fetched_row = await fetch_public_notion_blocks(row_url, client=client)
+                    source = normalize_notion_blocks(fetched_row.target, fetched_row.blocks)
+                    sources.append(_source_with_database_properties(source, row_block, rows.schema))
+                except NotionCollectionError as error:
+                    warnings.append(NotionCollectionWarning(row_url, error.code, str(error)))
+
+    return sources, warnings
+
+
+def _direct_collection_views(
+    page: FetchedNotionBlocks,
+) -> list[tuple[str, Mapping[str, Any]]]:
+    """페이지 내부 데이터베이스 뷰 ID·블록 탐색"""
+    values = _block_values_by_id(page.blocks)
+    root_id, _ = _root_page_block(page.target, values)
+    views: list[tuple[str, Mapping[str, Any]]] = []
+    for _, block in _walk_descendant_blocks(root_id, values):
+        if _block_type(block) != "collection_view":
+            continue
+        view_ids = block.get("view_ids")
+        if isinstance(view_ids, list):
+            views.extend((view_id, block) for view_id in view_ids if isinstance(view_id, str))
+    return views
+
+
+async def _fetch_collection_rows(
+    view_id: str,
+    view_block: Mapping[str, Any],
+    space_id: str | None,
+    *,
+    client: httpx.AsyncClient,
+) -> _NotionDatabaseRows:
+    """공개 뷰의 항목·컬렉션 속성 스키마 조회"""
+    if space_id is None:
+        raise NotionCollectionError("invalid_response", "Notion space ID가 없습니다.")
+    response = await _post_json_response(
+        client,
+        NOTION_SYNC_RECORDS_API_URL,
+        {
+            "requests": [
+                {
+                    "pointer": {"table": "collection_view", "id": view_id, "spaceId": space_id},
+                    "version": -1,
+                }
+            ]
+        },
+    )
+    _raise_for_block_status(response)
+    view = _record_value(_decode_json(response), "collection_view", view_id)
+    response = await _post_json_response(
+        client,
+        NOTION_QUERY_COLLECTION_API_URL,
+        {
+            "collectionView": view,
+            "collectionViewBlock": view_block,
+            "clientType": "notion_app",
+            "userTimeZone": "Asia/Seoul",
+            "isFullScreen": False,
+            "isMobile": False,
+        },
+    )
+    _raise_for_block_status(response)
+    payload = _decode_json(response)
+    result = payload.get("result")
+    reducers = result.get("reducerResults") if isinstance(result, Mapping) else None
+    groups = (
+        [
+            value
+            for value in reducers.values()
+            if isinstance(value, Mapping) and value.get("type") == "results"
+        ]
+        if isinstance(reducers, Mapping)
+        else []
+    )
+    if not groups:
+        raise NotionCollectionError(
+            "invalid_response", "데이터베이스 항목 목록이 올바르지 않습니다."
+        )
+    block_ids: list[str] = []
+    has_more = False
+    for group in groups:
+        ids = group.get("blockIds")
+        more = group.get("hasMore")
+        if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
+            raise NotionCollectionError(
+                "invalid_response", "데이터베이스 항목 목록이 올바르지 않습니다."
+            )
+        if not isinstance(more, bool):
+            raise NotionCollectionError(
+                "invalid_response", "데이터베이스 추가 항목 상태가 없습니다."
+            )
+        block_ids.extend(ids)
+        has_more = has_more or more
+    block_ids = list(dict.fromkeys(block_ids))
+
+    collection_id = view_block.get("collection_id")
+    if not isinstance(collection_id, str):
+        raise NotionCollectionError("invalid_response", "데이터베이스 ID가 없습니다.")
+    collection = _record_value(payload, "collection", collection_id)
+    schema = collection.get("schema")
+    if not isinstance(schema, Mapping):
+        raise NotionCollectionError("invalid_response", "데이터베이스 속성 스키마가 없습니다.")
+    rows = [
+        (_normalized_block_id(item), _record_value(payload, "block", item)) for item in block_ids
+    ]
+    return _NotionDatabaseRows(rows=rows, schema=schema, has_more=has_more)
+
+
+def _record_value(payload: Mapping[str, Any], table: str, record_id: str) -> Mapping[str, Any]:
+    """recordMap 항목의 블록·뷰·컬렉션 값 추출"""
+    record_map = payload.get("recordMap")
+    records = record_map.get(table) if isinstance(record_map, Mapping) else None
+    record = records.get(record_id) if isinstance(records, Mapping) else None
+    envelope = record.get("value") if isinstance(record, Mapping) else None
+    value = envelope.get("value") if isinstance(envelope, Mapping) else None
+    if not isinstance(value, Mapping):
+        raise NotionCollectionError("invalid_response", f"Notion {table} 항목을 읽을 수 없습니다.")
+    return value
+
+
+def _source_with_database_properties(
+    source: CollectedSource,
+    row: Mapping[str, Any],
+    schema: Mapping[str, Mapping[str, Any]],
+) -> CollectedSource:
+    """데이터베이스 속성 원문을 항목 Source·Evidence에 추가"""
+    properties = row.get("properties")
+    if not isinstance(properties, Mapping):
+        return source
+    lines: list[str] = []
+    evidence = list(source.evidence_candidates)
+    for property_id, definition in schema.items():
+        if property_id == "title" or not isinstance(definition, Mapping):
+            continue
+        name = definition.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        value = _database_property_text(properties.get(property_id), definition.get("type"))
+        if value is None:
+            continue
+        lines.append(f"- {name}: {value}")
+        locator = f"notion.property:{source.source_key.removeprefix('notion:page:')}:{property_id}"
+        dates = (
+            _database_date_values(properties.get(property_id))
+            if definition.get("type") == "date"
+            else None
+        )
+        snippets = [part for part in dates if part is not None] if dates else [value]
+        evidence.extend(EvidenceCandidate(snippet=part, locator=locator) for part in snippets)
+    if not lines:
+        return source
+    return source.model_copy(
+        update={
+            "content": f"{source.content}\n\n## Database properties\n\n" + "\n".join(lines),
+            "evidence_candidates": evidence,
+        }
+    )
+
+
+def _database_property_text(value: object, property_type: object) -> str | None:
+    """Notion 속성의 텍스트·날짜 값 추출"""
+    if not isinstance(value, list):
+        return None
+    if property_type == "date":
+        dates = _database_date_values(value)
+        if dates is None:
+            return None
+        start, end = dates
+        return f"{start} ~ {end}" if end is not None else start
+    parts = [
+        fragment[0]
+        for fragment in value
+        if isinstance(fragment, list) and fragment and isinstance(fragment[0], str)
+    ]
+    text = "".join(parts).strip()
+    return text or None
+
+
+def _database_date_values(value: object) -> tuple[str, str | None] | None:
+    """Notion 날짜 속성의 원본 시작일·종료일 추출"""
+    if not isinstance(value, list):
+        return None
+    for fragment in value:
+        if not isinstance(fragment, list) or len(fragment) < 2:
+            continue
+        for annotation in fragment[1] if isinstance(fragment[1], list) else []:
+            if not isinstance(annotation, list) or len(annotation) < 2 or annotation[0] != "d":
+                continue
+            date = annotation[1]
+            if isinstance(date, Mapping) and isinstance(date.get("start_date"), str):
+                end = date.get("end_date")
+                return date["start_date"], end if isinstance(end, str) else None
+    return None
 
 
 async def _fetch_block_chunk(
@@ -203,6 +527,7 @@ async def _fetch_block_chunk(
 async def _fetch_missing_child_blocks(
     blocks: dict[str, Mapping[str, Any]],
     space_id: str | None,
+    root_id: str,
     *,
     client: httpx.AsyncClient,
 ) -> None:
@@ -211,7 +536,7 @@ async def _fetch_missing_child_blocks(
         return
 
     for _ in range(MAX_NOTION_SYNC_BATCHES):
-        missing_ids = _missing_child_block_ids(blocks)
+        missing_ids = _missing_child_block_ids(blocks, root_id)
         if not missing_ids:
             return
 
@@ -387,22 +712,36 @@ def _merge_blocks(
     destination.update(incoming)
 
 
-def _missing_child_block_ids(blocks: Mapping[str, Mapping[str, Any]]) -> list[str]:
-    """부모 content에만 있는 자식 블록 ID 탐색"""
+def _missing_child_block_ids(blocks: Mapping[str, Mapping[str, Any]], root_id: str) -> list[str]:
+    """요청한 페이지 내부의 누락된 자식 블록 ID 탐색"""
     block_values = _block_values_by_id(blocks)
     missing_ids: list[str] = []
-    known_missing_ids: set[str] = set()
-    for _, block in block_values.values():
+    seen: set[str] = set()
+    pending = [root_id]
+    while pending:
+        current_id = _normalized_block_id(pending.pop())
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        entry = block_values.get(current_id)
+        if entry is None:
+            continue
+        _, block = entry
+        if current_id != _normalized_block_id(root_id) and _block_type(block) == "page":
+            continue
         children = block.get("content")
         if not isinstance(children, list):
             continue
-        for child_id in children:
+        for child_id in reversed(children):
             if not isinstance(child_id, str):
                 continue
             normalized_id = _normalized_block_id(child_id)
-            if normalized_id in block_values or normalized_id in known_missing_ids:
+            if normalized_id in block_values:
+                pending.append(child_id)
                 continue
-            known_missing_ids.add(normalized_id)
+            if normalized_id in seen:
+                continue
+            seen.add(normalized_id)
             missing_ids.append(child_id)
     return missing_ids
 
@@ -435,6 +774,19 @@ def _root_page_block(
     return root
 
 
+def _direct_child_page_ids(
+    target: NotionPageTarget, blocks: Mapping[str, Mapping[str, Any]]
+) -> list[str]:
+    """부모 페이지 내부의 직접 하위 페이지 ID 탐색"""
+    block_values = _block_values_by_id(blocks)
+    root_id, _ = _root_page_block(target, block_values)
+    return [
+        _normalized_block_id(block_id)
+        for block_id, block in _walk_descendant_blocks(root_id, block_values)
+        if _block_type(block) == "page"
+    ]
+
+
 def _walk_descendant_blocks(
     root_id: str, block_values: Mapping[str, tuple[str, Mapping[str, Any]]]
 ) -> list[tuple[str, Mapping[str, Any]]]:
@@ -453,6 +805,8 @@ def _walk_descendant_blocks(
         visited.add(normalized_id)
         canonical_id, block = entry
         ordered_blocks.append((canonical_id, block))
+        if _block_type(block) == "page":
+            return
         children = block.get("content")
         if isinstance(children, list):
             for child_id in children:
@@ -527,11 +881,7 @@ def _todo_is_checked(block: Mapping[str, Any]) -> bool:
         return checked
     if isinstance(checked, list) and checked:
         first_value = checked[0]
-        return (
-            isinstance(first_value, list)
-            and bool(first_value)
-            and first_value[0] == "Yes"
-        )
+        return isinstance(first_value, list) and bool(first_value) and first_value[0] == "Yes"
     return False
 
 
