@@ -1,6 +1,14 @@
 -- 004 적용 후 실행한다. 실행 모듈이 전체 DDL을 한 트랜잭션으로 처리한다.
 -- Personal Ontology 1.1: 추출용 Class·Relation·값 타입, Entity 식별자, 분석 해시를 추가한다.
--- 기존 제약을 넓히기만 하므로 기존 데이터는 그대로 통과한다.
+-- 분석 완료 시각이 이미 있는 문서는 당시 원문 해시를 추정할 수 없어 수동 이관이 필요하다.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM ai.source_documents WHERE processed_at IS NOT NULL) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'PZ005',
+            MESSAGE = '분석 완료된 SourceDocument가 있어 처리 해시를 자동으로 채울 수 없습니다. 수동 이관이 필요합니다.';
+    END IF;
+END $$;
 
 ALTER TABLE ai.entities DROP CONSTRAINT entities_class_type_check;
 ALTER TABLE ai.entities ADD CONSTRAINT entities_class_type_check CHECK (

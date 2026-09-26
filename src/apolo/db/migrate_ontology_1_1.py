@@ -16,6 +16,8 @@ def main() -> None:
         with connect_db() as connection:
             connection.execute(ontology_1_1_migration_sql())
     except (ValueError, psycopg.Error) as error:
+        if getattr(error, "sqlstate", None) == "PZ005":
+            raise SystemExit(error.diag.message_primary) from None
         code = getattr(error, "sqlstate", None) or "CONNECTION_OR_CONFIG"
         raise SystemExit(
             f"온톨로지 1.1 마이그레이션 실패 ({code}). "
