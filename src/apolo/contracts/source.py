@@ -63,6 +63,29 @@ class Evidence(BaseModel):
 
     id: UUID
     source_document_id: UUID
+    source_content_hash: str = Field(min_length=1, pattern=r"\S")
     snippet: str = Field(min_length=1, pattern=r"\S")
     locator: str = Field(min_length=1, pattern=r"\S")
     created_at: AwareDatetime
+
+
+class EvidenceCandidate(BaseModel):
+    """Collector가 찾은 원문 후보. SourceDocument가 생긴 뒤 Evidence로 저장한다."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    snippet: str = Field(min_length=1, pattern=r"\S")
+    locator: str = Field(min_length=1, pattern=r"\S")
+
+
+class CollectedSource(BaseModel):
+    """Collector의 성공 결과. 네트워크 호출·Snapshot/Evidence 저장은 호출부 책임이다."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    source_type: Literal["github", "notion"]
+    source_key: str = Field(min_length=1, pattern=r"\S")
+    source_url: str = Field(min_length=1, pattern=r"\S")
+    source_version: str | None = Field(default=None, min_length=1, pattern=r"\S")
+    content: str = Field(min_length=1, pattern=r"\S")
+    evidence_candidates: list[EvidenceCandidate] = Field(default_factory=list)

@@ -30,13 +30,14 @@ def save_evidence(
             raise ValueError("소속 KG가 존재하지 않습니다.")
         cursor.execute(
             "INSERT INTO ai.evidence "
-            "(id,graph_id,source_document_id,snippet,locator,created_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s) "
+            "(id,graph_id,source_document_id,source_content_hash,snippet,locator,created_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (id) DO NOTHING",
             (
                 evidence.id,
                 graph_id,
                 evidence.source_document_id,
+                evidence.source_content_hash,
                 evidence.snippet,
                 evidence.locator,
                 evidence.created_at,

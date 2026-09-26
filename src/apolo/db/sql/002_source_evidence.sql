@@ -33,6 +33,8 @@ CREATE TABLE ai.evidence (
     -- 연결 대상과 같은 KG인지 DB에서 검증하기 위한 저장 전용 필드.
     graph_id UUID NOT NULL,
     source_document_id UUID NOT NULL,
+    -- Snapshot은 최신 상태 한 행만 유지하므로, 근거가 나온 원문 버전은 해시로 보존한다.
+    source_content_hash TEXT NOT NULL CHECK (source_content_hash ~ '[^[:space:]]'),
     snippet TEXT NOT NULL CHECK (snippet ~ '[^[:space:]]'),
     locator TEXT NOT NULL CHECK (locator ~ '[^[:space:]]'),
     created_at TIMESTAMPTZ NOT NULL,
