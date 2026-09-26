@@ -21,6 +21,13 @@ AI 처리는 두 가지 LangGraph workflow로 구성된다.
 | 6 | `feat/update-content` | Source 변경 감지, KG 수정·삭제 반영, 콘텐츠 갱신·사용자 편집 보호, Backend 연결 |
 | 7 | `chore/deploy-ai` | 통합 평가·배포 전 점검, Lightsail 배포 설정 |
 
+### UPDATE CONTENT 연결 시 필수 정리
+
+- Backend의 기존 `fetchSourceUpdates()`가 담당하는 외부 수집·해시 비교·스냅샷 관리를 AI로 이전한다. 두 서버에서 중복 수행하지 않는다.
+- Backend는 소유권 확인, 링크·갱신 요청 전달, 생성 결과 저장을 담당한다.
+- Backend의 `Portfolio.sourceSnapshots` 필드는 프론트 사용처와 응답 호환성을 확인한 뒤 유지·제거 여부를 조율한다. 임의로 삭제하지 않는다.
+- 완료 기준: 갱신 요청에서 AI만 수집·변경 감지를 수행하고, Backend 연결 및 기존 프론트 응답 호환성을 검증한다.
+
 ## 개발 환경
 
 - Python 3.12 이상 (`.python-version`: 3.12)
