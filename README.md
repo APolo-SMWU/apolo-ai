@@ -9,6 +9,25 @@ AI 처리는 두 가지 LangGraph workflow로 구성된다.
 
 콘텐츠 생성·갱신 시 Backend(Express)가 별도 AI 서버(FastAPI)를 내부 API로 호출한다. Frontend는 AI 서버를 직접 호출하지 않으며, Backend가 AI 결과를 검증하고 최종 콘텐츠를 저장한다.
 
+## 브랜치 설명
+
+| 순서 | 브랜치 | 주요 기능 |
+|---|---|---|
+| 1 | `feat/profile-seed-kg` | 프로필·KG 모델과 온톨로지 규칙, Seed 변환·검증, DB 저장·조회·중복 처리·프로필 수정 반영 |
+| 2 | `feat/generate-portfolio` | 프로필 Seed → 학력·경력 블록 → `/generate` → Backend 연결 |
+| 3 | `feat/source-collection` | Source·Snapshot·Evidence 저장 구조, GitHub·Public Notion 수집 |
+| 4 | `feat/knowledge-construction` | LLM·LangSmith 연결, 사실 후보 추출·검증·병합·KG 저장, 요구사항 속 사용자 사실 처리, Graph A 연결 |
+| 5 | `feat/content-generation` | KG 정보 선별, 콘텐츠 생성·근거·형식 검증, Graph B 연결 |
+| 6 | `feat/update-content` | Source 변경 감지, KG 수정·삭제 반영, 콘텐츠 갱신·사용자 편집 보호, Backend 연결 |
+| 7 | `chore/deploy-ai` | 통합 평가·배포 전 점검, Lightsail 배포 설정 |
+
+### UPDATE CONTENT 연결 시 필수 정리
+
+- Backend의 기존 `fetchSourceUpdates()`가 담당하는 외부 수집·해시 비교·스냅샷 관리를 AI로 이전한다. 두 서버에서 중복 수행하지 않는다.
+- Backend는 소유권 확인, 링크·갱신 요청 전달, 생성 결과 저장을 담당한다.
+- Backend의 `Portfolio.sourceSnapshots` 필드는 프론트 사용처와 응답 호환성을 확인한 뒤 유지·제거 여부를 조율한다. 임의로 삭제하지 않는다.
+- 완료 기준: 갱신 요청에서 AI만 수집·변경 감지를 수행하고, Backend 연결 및 기존 프론트 응답 호환성을 검증한다.
+
 ## 개발 환경
 
 - Python 3.12 이상 (`.python-version`: 3.12)
