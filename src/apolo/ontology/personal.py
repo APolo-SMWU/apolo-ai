@@ -102,17 +102,6 @@ PROPERTY_VALUES: Final[dict[tuple[ClassType, str], frozenset[str]]] = {
     ),
     ("Work", "kind"): frozenset({"project", "publication", "opensource"}),
     ("Credential", "kind"): frozenset({"award", "certification"}),
-    ("Skill", "category"): frozenset(
-        {
-            "programming_language",
-            "framework",
-            "library",
-            "tool",
-            "platform",
-            "domain",
-            "spoken_language",
-        }
-    ),
     ("Organization", "type"): frozenset(
         {"company", "university", "club", "institution", "github_org"}
     ),
