@@ -1,21 +1,30 @@
 """GitHub 공개 Profile·Repository 수집"""
 
 import base64
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote, unquote, urlparse
 
 import httpx    # GitHub API 요청
+from dotenv import load_dotenv
 
+from apolo.collectors.github_selection import (
+    MAX_FILE_SELECTION_REPOSITORIES,
+    MAX_SELECTED_FILE_BYTES,
+    is_readme_insufficient,
+    select_repository_files,
+)
 from apolo.contracts.source import CollectedSource, EvidenceCandidate
 
 # 프로필당 Repository는 최대 20개, README와 선택 파일은 크기 제한
 GITHUB_API_URL = "https://api.github.com"
 GITHUB_API_VERSION = "2026-03-10"
 MAX_PROFILE_REPOSITORIES = 20
+REPOSITORY_LIST_PAGE_SIZE = 100
 MAX_README_BYTES = 200_000
-MAX_SELECTED_FILE_BYTES = 100_000
+README_LOCATOR = "github.readme"
 
 
 class GitHubCollectionError(RuntimeError):
@@ -105,15 +114,23 @@ async def collect_github_source(
 
 
 async def collect_github_sources(
-    source_url: str, *, client: httpx.AsyncClient
+    source_url: str, *, client: httpx.AsyncClient, select_files: bool = False
 ) -> GitHubCollectionResult:
-    """Profile·Repository·README 묶음 수집"""
+    """Profile·Repository·README 묶음 수집
+
+    select_files면 README가 부족한 Repository에 규칙으로 고른 파일 원문을 보탠다.
+    """
     target, payload = await _fetch_target_payload(source_url, client=client)
     if target.kind == "repository":
         source, warning = await _repository_source_with_readme(payload, client=client)
-        return GitHubCollectionResult(
-            sources=[source], warnings=[warning] if warning is not None else []
-        )
+        warnings = [warning] if warning is not None else []
+        sources = [source]
+        if select_files and (warning is None or warning.code != "rate_limited"):
+            sources, file_warnings = await _add_selected_files(
+                [(source, payload)], limit=1, client=client
+            )
+            warnings.extend(file_warnings)
+        return GitHubCollectionResult(sources=sources, warnings=warnings)
 
     profile = _normalize_target(target, payload)
     warnings: list[GitHubCollectionWarning] = []
@@ -123,28 +140,30 @@ async def collect_github_sources(
         warnings.append(_warning_from_error(profile.source_url, error))
         return GitHubCollectionResult(sources=[profile], warnings=warnings)
 
-    if len(repositories) > MAX_PROFILE_REPOSITORIES:
-        warnings.append(
-            GitHubCollectionWarning(
-                source_url=profile.source_url,
-                code="repository_limit",
-                message=f"최근 Repository {MAX_PROFILE_REPOSITORIES}개만 수집했습니다.",
-            )
-        )
+    selected_repositories, selection_warnings = await _select_profile_repositories(
+        repositories,
+        _required_text(payload, "login"),
+        source_url=profile.source_url,
+        client=client,
+    )
+    warnings.extend(selection_warnings)
 
     sources = [profile]
-    selected_repositories = repositories[:MAX_PROFILE_REPOSITORIES]
+    collected_repositories: list[tuple[CollectedSource, Mapping[str, Any]]] = []
     readme_rate_limited = False
     for index, repository in enumerate(selected_repositories):
         if readme_rate_limited:
             try:
-                sources.append(_repository_source_without_readme(repository))
+                source = _repository_source_without_readme(repository)
+                sources.append(source)
+                collected_repositories.append((source, repository))
             except GitHubCollectionError as error:
                 warnings.append(_warning_from_error(profile.source_url, error))
             continue
         try:
             source, warning = await _repository_source_with_readme(repository, client=client)
             sources.append(source)
+            collected_repositories.append((source, repository))
             if warning is not None:
                 warnings.append(warning)
                 if warning.code == "rate_limited":
@@ -162,7 +181,129 @@ async def collect_github_sources(
                         )
         except GitHubCollectionError as error:
             warnings.append(_warning_from_error(profile.source_url, error))
+
+    if select_files and not readme_rate_limited:
+        repository_sources, file_warnings = await _add_selected_files(
+            collected_repositories,
+            limit=MAX_FILE_SELECTION_REPOSITORIES,
+            client=client,
+        )
+        sources = [profile, *repository_sources]
+        warnings.extend(file_warnings)
     return GitHubCollectionResult(sources=sources, warnings=warnings)
+
+
+async def _add_selected_files(
+    repositories: list[tuple[CollectedSource, Mapping[str, Any]]],
+    *,
+    limit: int,
+    client: httpx.AsyncClient,
+) -> tuple[list[CollectedSource], list[GitHubCollectionWarning]]:
+    """README가 부족한 저장소에만 파일 원문 보충"""
+    sources: list[CollectedSource] = []
+    warnings: list[GitHubCollectionWarning] = []
+    selected_count = 0
+    rate_limited = False
+    limit_warned = False
+    for source, repository in repositories:
+        if not is_readme_insufficient(_readme_text(source)):
+            sources.append(source)
+            continue
+        if rate_limited:
+            sources.append(source)
+            continue
+        if selected_count >= limit:
+            if not limit_warned:
+                warnings.append(
+                    GitHubCollectionWarning(
+                        source_url=source.source_url,
+                        code="file_selection_limit",
+                        message=f"README가 부족한 Repository 중 {limit}개만 파일을 보충했습니다.",
+                    )
+                )
+                limit_warned = True
+            sources.append(source)
+            continue
+        selected_count += 1
+        updated, file_warnings, rate_limited = await _collect_selected_files(
+            source, repository, client=client
+        )
+        sources.append(updated)
+        warnings.extend(file_warnings)
+    return sources, warnings
+
+
+async def _collect_selected_files(
+    source: CollectedSource,
+    repository: Mapping[str, Any],
+    *,
+    client: httpx.AsyncClient,
+) -> tuple[CollectedSource, list[GitHubCollectionWarning], bool]:
+    """파일 목록에서 고른 텍스트 원문을 Source에 추가"""
+    warnings: list[GitHubCollectionWarning] = []
+    try:
+        owner, name = _repository_parts(_required_text(repository, "full_name"))
+        branch = _required_text(repository, "default_branch")
+        tree = await _fetch_tree(
+            f"/repos/{_path_segment(owner)}/{_path_segment(name)}",
+            branch,
+            source.source_url,
+            client=client,
+        )
+        if tree.truncated:
+            raise GitHubCollectionError(
+                "invalid_response", "GitHub 파일 목록이 일부만 반환되어 파일 선택을 건너뛰었습니다."
+            )
+    except ValueError as error:
+        warnings.append(
+            GitHubCollectionWarning(source.source_url, "file_selection_failed", str(error))
+        )
+        return source, warnings, False
+    except GitHubCollectionError as error:
+        warnings.append(
+            GitHubCollectionWarning(source.source_url, "file_selection_failed", str(error))
+        )
+        return source, warnings, error.code == "rate_limited"
+
+    for path in select_repository_files(tree.entries):
+        try:
+            selected = await collect_repository_file(tree, path, client=client)
+            if selected.content.strip():
+                source = _with_files(source, selected)
+        except GitHubCollectionError as error:
+            warnings.append(
+                GitHubCollectionWarning(source.source_url, "file_selection_failed", str(error))
+            )
+            if error.code == "rate_limited":
+                return source, warnings, True
+    return source, warnings, False
+
+
+def _with_files(source: CollectedSource, selected: GitHubRepositoryFile) -> CollectedSource:
+    """선택 파일의 원문과 경로별 근거 후보 결합"""
+    return source.model_copy(
+        update={
+            "content": f"{source.content}\n\n## File: {selected.path}\n\n{selected.content}",
+            "evidence_candidates": [
+                *source.evidence_candidates,
+                EvidenceCandidate(
+                    snippet=selected.content, locator=f"github.file:{selected.path}"
+                ),
+            ],
+        }
+    )
+
+
+def _readme_text(source: CollectedSource) -> str | None:
+    """README 근거 후보에서 원문 조회"""
+    return next(
+        (
+            candidate.snippet
+            for candidate in source.evidence_candidates
+            if candidate.locator == README_LOCATOR
+        ),
+        None,
+    )
 
 
 async def collect_repository_tree(
@@ -183,10 +324,16 @@ async def collect_repository_tree(
         source_url = _required_text(repository, "html_url")
     except ValueError as error:
         raise GitHubCollectionError("invalid_response", str(error)) from error
+    return await _fetch_tree(_target_path(target), branch, source_url, client=client)
 
+
+async def _fetch_tree(
+    repository_path: str, branch: str, source_url: str, *, client: httpx.AsyncClient
+) -> GitHubRepositoryTree:
+    """기본 브랜치 파일 목록 조회. 브랜치를 알고 있으면 Repository를 다시 조회하지 않는다."""
     tree = await _get_json(
         client,
-        f"{_target_path(target)}/git/trees/{_path_segment(branch)}",
+        f"{repository_path}/git/trees/{_path_segment(branch)}",
         params={"recursive": 1},
     )
     return _normalize_repository_tree(source_url, branch, tree)
@@ -343,6 +490,10 @@ def normalize_repository(
     payload: Mapping[str, Any], *, readme_content: str | None = None
 ) -> CollectedSource:
     """GitHub `GET /repos/{owner}/{repo}` 응답의 Repository Source 변환"""
+    if payload.get("private") is True:
+        raise GitHubCollectionError(
+            "unsupported_content", "비공개 GitHub Repository는 수집하지 않습니다."
+        )
     github_id = _required_int(payload, "id")
     full_name = _required_text(payload, "full_name")
     source_url = _required_text(payload, "html_url")
@@ -375,7 +526,7 @@ def normalize_repository(
             "content": f"{source.content}\n\n## README\n\n{readme_content}",
             "evidence_candidates": [
                 *source.evidence_candidates,
-                EvidenceCandidate(snippet=readme_content, locator="github.readme"),
+                EvidenceCandidate(snippet=readme_content, locator=README_LOCATOR),
             ],
         }
     )
@@ -403,6 +554,77 @@ def _normalize_target(target: _GitHubTarget, payload: Mapping[str, Any]) -> Coll
         raise GitHubCollectionError("invalid_response", str(error)) from error
 
 
+async def _select_profile_repositories(
+    repositories: list[Mapping[str, Any]],
+    login: str,
+    *,
+    source_url: str,
+    client: httpx.AsyncClient,
+) -> tuple[list[Mapping[str, Any]], list[GitHubCollectionWarning]]:
+    """최근 순으로 최대 20개를 고른다. fork는 사용자가 커밋한 경우만 고른다.
+
+    팀 org 레포를 개인 계정으로 fork해 최종본을 남기는 경우가 많아 fork를 일괄 제외하지 않는다.
+    커밋을 확인하지 못한 fork는 중요한 프로젝트일 수 있어 제외하지 않는다.
+    """
+    selected: list[Mapping[str, Any]] = []
+    warnings: list[GitHubCollectionWarning] = []
+    checks_blocked = False
+    for repository in repositories:
+        if repository.get("private") is True:
+            warnings.append(
+                GitHubCollectionWarning(
+                    source_url=_optional_text(repository, "html_url") or source_url,
+                    code="unsupported_content",
+                    message="비공개 GitHub Repository는 수집하지 않습니다.",
+                )
+            )
+            continue
+        if len(selected) == MAX_PROFILE_REPOSITORIES:
+            warnings.append(
+                GitHubCollectionWarning(
+                    source_url=source_url,
+                    code="repository_limit",
+                    message=f"최근 Repository {MAX_PROFILE_REPOSITORIES}개만 수집했습니다.",
+                )
+            )
+            break
+        if repository.get("fork") is True and not checks_blocked:
+            try:
+                if not await _has_user_commits(repository, login, client=client):
+                    continue
+            except GitHubCollectionError as error:
+                checks_blocked = error.code == "rate_limited"
+                warnings.append(
+                    GitHubCollectionWarning(
+                        source_url=_optional_text(repository, "html_url") or source_url,
+                        code="fork_unverified",
+                        message="fork의 사용자 커밋을 확인하지 못해 제외하지 않았습니다.",
+                    )
+                )
+        selected.append(repository)
+    return selected, warnings
+
+
+async def _has_user_commits(
+    repository: Mapping[str, Any], login: str, *, client: httpx.AsyncClient
+) -> bool:
+    """사용자가 작성한 커밋을 1건만 조회한다. org에서 한 커밋도 fork에 그대로 남아 있다."""
+    try:
+        owner, name = _repository_parts(_required_text(repository, "full_name"))
+    except ValueError as error:
+        raise GitHubCollectionError("invalid_response", str(error)) from error
+    commits = await _get_json(
+        client,
+        f"/repos/{_path_segment(owner)}/{_path_segment(name)}/commits",
+        params={"author": login, "per_page": 1},
+    )
+    if not isinstance(commits, list):
+        raise GitHubCollectionError(
+            "invalid_response", "GitHub 커밋 목록 형식이 올바르지 않습니다."
+        )
+    return bool(commits)
+
+
 async def _list_profile_repositories(
     owner: str, *, client: httpx.AsyncClient
 ) -> list[Mapping[str, Any]]:
@@ -413,7 +635,7 @@ async def _list_profile_repositories(
         params={
             "type": "owner",
             "sort": "updated",
-            "per_page": MAX_PROFILE_REPOSITORIES + 1,
+            "per_page": REPOSITORY_LIST_PAGE_SIZE,
         },
     )
     valid_repositories = isinstance(payload, list) and all(
@@ -509,14 +731,19 @@ async def _get_json(
     client: httpx.AsyncClient, path: str, *, params: Mapping[str, str | int] | None = None
 ) -> object:
     """GitHub API JSON 요청"""
+    load_dotenv()
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         response = await client.get(
             f"{GITHUB_API_URL}{path}",
             params=params,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": GITHUB_API_VERSION,
-            },
+            headers=headers,
         )
     except httpx.RequestError as error:
         raise GitHubCollectionError("unavailable", "GitHub API에 연결하지 못했습니다.") from error
