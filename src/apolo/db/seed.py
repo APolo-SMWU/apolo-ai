@@ -207,8 +207,9 @@ def update_profile_seed(
     existing: SeedKnowledgeGraph,
     updated: SeedKnowledgeGraph,
 ) -> None:
-    """갱신 규칙으로 만든 결과를 한 트랜잭션으로 반영한다. 프로필 전용 KG에 한정한다.
+    """갱신 규칙으로 만든 결과를 한 트랜잭션으로 반영한다. 프로필 범위만 변경한다.
 
+    프로필에서 빠진 Entity도 다른 출처의 Fact·Relation이 참조하면 남긴다.
     모든 KG 갱신자는 버전 확인/증가 규칙을 따라야 한다.
     충돌 시 호출부가 최신 KG를 다시 읽고 갱신 결과를 계산해야 한다.
     기존 트랜잭션 안에서는 최종 commit을 호출부가 담당한다.
@@ -263,8 +264,13 @@ def update_profile_seed(
             "WHERE f.entity_id=e.id AND e.graph_id=%s AND f.id=ANY(%s)",
             (existing.id, remove_facts),
         )
+        # 프로필에서 빠진 Entity라도 다른 출처의 Fact·Relation이 남아 있으면 삭제하지 않는다.
+        # 프로필 Fact·Relation은 위에서 먼저 지웠으므로, 남은 참조는 다른 출처의 것이다.
         cursor.execute(
-            "DELETE FROM ai.entities WHERE graph_id=%s AND id=ANY(%s)",
+            "DELETE FROM ai.entities e WHERE e.graph_id=%s AND e.id=ANY(%s) "
+            "AND NOT EXISTS (SELECT 1 FROM ai.facts f WHERE f.entity_id=e.id) "
+            "AND NOT EXISTS (SELECT 1 FROM ai.relations r WHERE r.graph_id=e.graph_id "
+            "AND e.id IN (r.subject_entity_id, r.object_entity_id))",
             (existing.id, list(old_entities.keys() - new_entities.keys())),
         )
         cursor.executemany(
