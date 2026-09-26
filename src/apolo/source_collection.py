@@ -23,6 +23,24 @@ class StoredPublicCollection:
     saved_sources: list[PersistedCollectedSource]
     warnings: list[PublicCollectionWarning]
 
+    def sources_needing_extraction(
+        self,
+    ) -> list[tuple[CollectedSource, PersistedCollectedSource]]:
+        """현재 수집 해시와 마지막 분석 해시가 다른 Source 선택"""
+        pending = []
+        for source, saved in zip(self.collected_sources, self.saved_sources, strict=True):
+            if (
+                source.source_key != saved.document.source_key
+                or source.source_key != saved.snapshot.source_key
+            ):
+                raise ValueError("수집 원문과 저장 상태의 Source 키가 일치해야 합니다.")
+            if (
+                saved.snapshot.fetch_status == "success"
+                and saved.snapshot.content_hash != saved.document.processed_content_hash
+            ):
+                pending.append((source, saved))
+        return pending
+
 
 async def collect_and_store_public_sources(
     connection: psycopg.Connection,
