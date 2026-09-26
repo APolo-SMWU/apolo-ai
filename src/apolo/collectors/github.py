@@ -1,4 +1,4 @@
-"""GitHub 공개 Profile·Repository 응답을 APolo 수집 결과로 정규화"""
+"""GitHub 공개 Profile·Repository 수집"""
 
 import base64
 from collections.abc import Mapping
@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote, unquote, urlparse
 
-import httpx
+import httpx    # GitHub API 요청
 
 from apolo.contracts.source import CollectedSource, EvidenceCandidate
 
+# 프로필당 Repository는 최대 20개, README는 표시된 크기 기준 200,000바이트로 제한
 GITHUB_API_URL = "https://api.github.com"
 GITHUB_API_VERSION = "2026-03-10"
 MAX_PROFILE_REPOSITORIES = 20
@@ -17,7 +18,7 @@ MAX_README_BYTES = 200_000
 
 
 class GitHubCollectionError(RuntimeError):
-    """GitHub Collector의 예상 가능한 실패. API route가 warning으로 바꾼다."""
+    """GitHub Collector 오류 처리"""
 
     def __init__(
         self,
@@ -26,13 +27,14 @@ class GitHubCollectionError(RuntimeError):
         ],
         message: str,
     ) -> None:
+        """오류 코드·메시지 보관"""
         super().__init__(message)
         self.code = code
 
 
 @dataclass(frozen=True)
 class GitHubCollectionWarning:
-    """일부 GitHub 원본을 읽지 못해도 생성 흐름을 계속할 때의 정보."""
+    """부분 수집 실패 경고 정보"""
 
     source_url: str
     code: str
@@ -41,7 +43,7 @@ class GitHubCollectionWarning:
 
 @dataclass(frozen=True)
 class GitHubCollectionResult:
-    """하나의 GitHub URL에서 얻은 Source와 부분 수집 경고."""
+    """GitHub URL 수집 결과"""
 
     sources: list[CollectedSource]
     warnings: list[GitHubCollectionWarning]
@@ -49,6 +51,8 @@ class GitHubCollectionResult:
 
 @dataclass(frozen=True)
 class _GitHubTarget:
+    """GitHub URL 파싱 대상"""
+
     kind: Literal["profile", "repository"]
     owner: str
     repository: str | None = None
@@ -57,11 +61,7 @@ class _GitHubTarget:
 async def collect_github_source(
     source_url: str, *, client: httpx.AsyncClient
 ) -> CollectedSource:
-    """공개 GitHub Profile 또는 Repository URL을 수집하고 정규화한다.
-
-    URL은 github.com만 허용하고 API 주소는 코드가 고정한다. 따라서 입력 URL을 직접
-    요청하지 않는다. 호출부는 client 수명과 실패 후 Snapshot 보존 정책을 관리한다.
-    """
+    """Profile·Repository 단일 Source 수집"""
     target, payload = await _fetch_target_payload(source_url, client=client)
     return _normalize_target(target, payload)
 
@@ -69,11 +69,7 @@ async def collect_github_source(
 async def collect_github_sources(
     source_url: str, *, client: httpx.AsyncClient
 ) -> GitHubCollectionResult:
-    """GitHub Profile은 공개 Repository·README까지, Repository는 README까지 수집한다.
-
-    Profile 입력에서는 최근 갱신된 Repository 20개를 대상으로 한다. 목록 또는 개별
-    README 실패는 기존에 수집한 Source를 버리지 않고 warning으로 반환한다.
-    """
+    """Profile·Repository·README 묶음 수집"""
     target, payload = await _fetch_target_payload(source_url, client=client)
     if target.kind == "repository":
         source, warning = await _repository_source_with_readme(payload, client=client)
@@ -132,11 +128,7 @@ async def collect_github_sources(
 
 
 def normalize_profile(payload: Mapping[str, Any]) -> CollectedSource:
-    """GitHub `GET /users/{username}` 응답을 Profile 소스로 변환한다.
-
-    GitHub numeric id를 source_key로 사용하므로 username 변경 뒤에도 같은 소스로 판단한다.
-    `updated_at`은 빠른 변경 힌트일 뿐이며, 실제 변경 여부는 이후 content hash가 결정한다.
-    """
+    """GitHub `GET /users/{username}` 응답의 Profile Source 변환"""
     github_id = _required_int(payload, "id")
     login = _required_text(payload, "login")
     source_url = _required_text(payload, "html_url")
@@ -159,10 +151,7 @@ def normalize_profile(payload: Mapping[str, Any]) -> CollectedSource:
 def normalize_repository(
     payload: Mapping[str, Any], *, readme_content: str | None = None
 ) -> CollectedSource:
-    """GitHub `GET /repos/{owner}/{repo}` 응답을 Repository 소스로 변환한다.
-
-    README가 있으면 같은 Repository source의 본문과 근거 후보에 추가한다.
-    """
+    """GitHub `GET /repos/{owner}/{repo}` 응답의 Repository Source 변환"""
     github_id = _required_int(payload, "id")
     full_name = _required_text(payload, "full_name")
     source_url = _required_text(payload, "html_url")
@@ -204,6 +193,7 @@ def normalize_repository(
 async def _fetch_target_payload(
     source_url: str, *, client: httpx.AsyncClient
 ) -> tuple[_GitHubTarget, Mapping[str, Any]]:
+    """URL 대상과 GitHub API 응답 조회"""
     target = _parse_target(source_url)
     path = _target_path(target)
     payload = await _get_json(client, path)
@@ -213,6 +203,7 @@ async def _fetch_target_payload(
 
 
 def _normalize_target(target: _GitHubTarget, payload: Mapping[str, Any]) -> CollectedSource:
+    """대상 종류별 Source 정규화"""
     try:
         if target.kind == "profile":
             return normalize_profile(payload)
@@ -224,6 +215,7 @@ def _normalize_target(target: _GitHubTarget, payload: Mapping[str, Any]) -> Coll
 async def _list_profile_repositories(
     owner: str, *, client: httpx.AsyncClient
 ) -> list[Mapping[str, Any]]:
+    """소유자 Repository 최신 목록 조회"""
     payload = await _get_json(
         client,
         f"/users/{_path_segment(owner)}/repos",
@@ -246,6 +238,7 @@ async def _list_profile_repositories(
 async def _repository_source_with_readme(
     payload: Mapping[str, Any], *, client: httpx.AsyncClient
 ) -> tuple[CollectedSource, GitHubCollectionWarning | None]:
+    """Repository·README Source 결합"""
     source = _repository_source_without_readme(payload)
     try:
         owner, repository = _repository_parts(_required_text(payload, "full_name"))
@@ -264,6 +257,7 @@ async def _repository_source_with_readme(
 
 
 def _repository_source_without_readme(payload: Mapping[str, Any]) -> CollectedSource:
+    """README 제외 Repository Source 정규화"""
     try:
         return normalize_repository(payload)
     except ValueError as error:
@@ -277,6 +271,7 @@ async def _fetch_readme(
     source_url: str,
     client: httpx.AsyncClient,
 ) -> tuple[str | None, GitHubCollectionWarning | None]:
+    """Repository README 수집·경고 변환"""
     try:
         payload = await _get_json(
             client,
@@ -298,6 +293,7 @@ async def _fetch_readme(
 
 
 def _decode_readme(payload: object) -> str | None:
+    """Base64 README 텍스트 변환"""
     if not isinstance(payload, Mapping):
         raise ValueError("GitHub README 응답 형식이 올바르지 않습니다.")
     if payload.get("encoding") != "base64":
@@ -321,6 +317,7 @@ def _decode_readme(payload: object) -> str | None:
 async def _get_json(
     client: httpx.AsyncClient, path: str, *, params: Mapping[str, str | int] | None = None
 ) -> object:
+    """GitHub API JSON 요청"""
     try:
         response = await client.get(
             f"{GITHUB_API_URL}{path}",
@@ -343,12 +340,14 @@ async def _get_json(
 
 
 def _target_path(target: _GitHubTarget) -> str:
+    """대상별 GitHub API 경로 생성"""
     if target.kind == "profile":
         return f"/users/{_path_segment(target.owner)}"
     return f"/repos/{_path_segment(target.owner)}/{_path_segment(target.repository)}"
 
 
 def _repository_parts(full_name: str) -> tuple[str, str]:
+    """Repository full_name의 owner·name 분리"""
     parts = full_name.split("/")
     if len(parts) != 2 or not all(parts):
         raise ValueError("GitHub Repository full_name 형식이 올바르지 않습니다.")
@@ -356,6 +355,7 @@ def _repository_parts(full_name: str) -> tuple[str, str]:
 
 
 def _warning_from_error(source_url: str, error: GitHubCollectionError) -> GitHubCollectionWarning:
+    """수집 오류의 경고 정보 변환"""
     return GitHubCollectionWarning(source_url=source_url, code=error.code, message=str(error))
 
 
@@ -368,6 +368,7 @@ def _collected_source(
     fields: list[tuple[str, str]],
     evidence_fields: list[tuple[str, str]] | None = None,
 ) -> CollectedSource:
+    """필드 기반 Source·Evidence 후보 생성"""
     content_lines = [f"# {title}", ""]
     for field, value in fields:
         content_lines.append(f"- {field}: {value}")
@@ -386,6 +387,7 @@ def _collected_source(
 
 
 def _required_int(payload: Mapping[str, Any], field: str) -> int:
+    """필수 양의 정수 필드 검증"""
     value = payload.get(field)
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
@@ -393,6 +395,7 @@ def _required_int(payload: Mapping[str, Any], field: str) -> int:
 
 
 def _required_text(payload: Mapping[str, Any], field: str) -> str:
+    """필수 문자열 필드 검증"""
     value = payload.get(field)
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"GitHub 응답의 {field}이 필요합니다.")
@@ -400,6 +403,7 @@ def _required_text(payload: Mapping[str, Any], field: str) -> str:
 
 
 def _optional_text(payload: Mapping[str, Any], field: str) -> str | None:
+    """선택 문자열 필드 검증"""
     value = payload.get(field)
     if value is None:
         return None
@@ -409,6 +413,7 @@ def _optional_text(payload: Mapping[str, Any], field: str) -> str | None:
 
 
 def _optional_topics(payload: Mapping[str, Any]) -> list[str]:
+    """선택 topic 문자열 목록 검증"""
     value = payload.get("topics")
     if value is None:
         return []
@@ -421,6 +426,7 @@ def _optional_topics(payload: Mapping[str, Any]) -> list[str]:
 
 
 def _parse_target(source_url: str) -> _GitHubTarget:
+    """공개 GitHub URL 대상 파싱"""
     parsed = urlparse(source_url)
     if parsed.scheme != "https" or parsed.hostname not in {"github.com", "www.github.com"}:
         raise GitHubCollectionError("unsupported_url", "GitHub 공개 URL만 수집할 수 있습니다.")
@@ -442,18 +448,21 @@ def _parse_target(source_url: str) -> _GitHubTarget:
 
 
 def _nonempty_path_part(value: str) -> str:
+    """URL 경로 요소 검증"""
     if not value or value in {".", ".."}:
         raise GitHubCollectionError("unsupported_url", "GitHub URL 경로가 올바르지 않습니다.")
     return value
 
 
 def _path_segment(value: str | None) -> str:
+    """GitHub API 경로 세그먼트 인코딩"""
     if value is None:
         raise RuntimeError("Repository URL에는 저장소 이름이 필요합니다.")
     return quote(value, safe="-._~")
 
 
 def _raise_for_status(response: httpx.Response) -> None:
+    """GitHub HTTP 오류 코드 분류"""
     if response.status_code == 404:
         raise GitHubCollectionError(
             "not_found", "GitHub Profile 또는 Repository를 찾지 못했습니다."
