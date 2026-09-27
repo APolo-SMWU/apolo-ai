@@ -66,8 +66,8 @@ def apply_source_extraction(
             resolution,
             now=now,
             force_candidate_fact_indexes=force_candidates,
-            replacing_source_key=source.source_key,
-            replacing_source_hash=stored.snapshot.content_hash,
+            current_source_document_id=stored.document.id,
+            current_source_content_hash=stored.snapshot.content_hash,
         )
         _connect_evidence(connection, graph_id, source, stored, persistent, persisted)
         _mark_source_processed(cursor, graph_id, stored, now)
