@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 
 from apolo.content_selection.rules import ContentSelection
-from apolo.contracts.content import GraphBOutput
+from apolo.contracts.content import graph_b_output_json_schema
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ def build_content_generation_prompt(
     user = "\n\n".join(
         [
             "Graph B 출력 JSON Schema:\n"
-            + json.dumps(GraphBOutput.model_json_schema(), ensure_ascii=False, sort_keys=True),
+            + json.dumps(graph_b_output_json_schema(), ensure_ascii=False, sort_keys=True),
             "선별된 콘텐츠 Entity 유형:\n"
             + json.dumps(sorted(selection.selected_classes), ensure_ascii=False),
             "사용자 요구사항:\n" + (requirements.strip() or "없음"),

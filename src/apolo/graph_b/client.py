@@ -8,7 +8,7 @@ from openai import OpenAI
 from pydantic import ValidationError
 
 from apolo.content_selection.rules import ContentSelection
-from apolo.contracts.content import GraphBOutput
+from apolo.contracts.content import GraphBOutput, graph_b_output_json_schema
 from apolo.graph_b.prompt import build_content_generation_prompt
 from apolo.llm.config import LangSmithSettings, LlmSettings
 
@@ -58,7 +58,7 @@ class OpenAIContentGenerationClient:
                     "type": "json_schema",
                     "name": "graph_b_output",
                     "strict": True,
-                    "schema": GraphBOutput.model_json_schema(),
+                    "schema": graph_b_output_json_schema(),
                 }
             },
         )
