@@ -107,7 +107,7 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
 
             warnings = await _run_graph_a(connection, seed.id, request.source_links)
             graph_b_result, graph_b_warnings = _run_graph_b(
-                connection, request.user_id, ""
+                connection, request.user_id, request.requirements
             )
             warnings.extend(graph_b_warnings)
             if graph_b_result is not None:
