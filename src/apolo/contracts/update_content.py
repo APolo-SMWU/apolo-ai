@@ -6,12 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class UpdateContentRequest(BaseModel):
-    """기존 KG의 외부 Source를 다시 확인하기 위한 Backend 입력."""
+    """기존 KG의 Source를 다시 확인하고 요구사항을 재사용하기 위한 Backend 입력."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     user_id: int = Field(gt=0, alias="userId")
     source_links: list[str] = Field(default_factory=list, alias="sourceLinks")
+    requirements: str = Field(default="", max_length=2_000)
 
     @field_validator("source_links")
     @classmethod
