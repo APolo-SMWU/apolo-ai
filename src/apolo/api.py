@@ -106,21 +106,23 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
                 )
 
             warnings = await _run_graph_a(connection, seed.id, request.source_links)
-            latest_seed = load_seed_by_user_id(connection, request.user_id) or seed
-            warnings.append(
-                GenerateWarning(
-                    code="GRAPH_B_NOT_RUN",
-                    message="Source 갱신은 완료했으며 콘텐츠 재생성은 다음 단계에서 연결됩니다.",
+            graph_b_result, graph_b_warnings = _run_graph_b(
+                connection, request.user_id, ""
+            )
+            warnings.extend(graph_b_warnings)
+            if graph_b_result is not None:
+                response = build_graph_b_response(graph_b_result)
+            else:
+                latest_seed = load_seed_by_user_id(connection, request.user_id) or seed
+                response = GenerateResponse(
+                    blocks=[],
+                    meta=GenerateMeta(
+                        ontology_schema_version=latest_seed.ontology_schema_version,
+                        knowledge_graph_version=latest_seed.version,
+                    ),
                 )
-            )
-            return GenerateResponse(
-                blocks=[],
-                meta=GenerateMeta(
-                    ontology_schema_version=latest_seed.ontology_schema_version,
-                    knowledge_graph_version=latest_seed.version,
-                ),
-                warnings=warnings,
-            )
+            response.warnings.extend(warnings)
+            return response
     except Exception:
         logger.error("Source 갱신 실패", exc_info=True)
         raise HTTPException(status_code=500, detail="콘텐츠 갱신 중 오류가 발생했습니다.") from None
