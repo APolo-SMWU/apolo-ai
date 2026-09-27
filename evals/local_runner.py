@@ -1,8 +1,6 @@
 """외부 API 없이 실행하는 deterministic Graph A·Graph B 평가기."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from uuid import UUID
 
 from apolo.content_selection.rules import select_relevant_knowledge
 from apolo.contracts.content import GraphBOutput
@@ -13,22 +11,12 @@ from apolo.contracts.extraction import (
     RelationCandidate,
 )
 from apolo.contracts.generate import TimelineBlock, TimelineItem, WorkItem, WorksBlock
-from apolo.contracts.knowledge import (
-    ActiveKnowledgeEntity,
-    ActiveKnowledgeGraph,
-    ActiveKnowledgeRelation,
-)
 from apolo.contracts.source import CollectedSource, EvidenceCandidate
 from apolo.extraction.evidence import validate_source_evidence
 from apolo.extraction.validation import validate_extraction
 from apolo.graph_b.validation import validate_graph_b_output
 from evals.cases import EVALUATION_CASES, EvaluationCase, load_evaluation_cases
-
-_NOW = datetime(2026, 9, 27, tzinfo=UTC)
-_GRAPH_ID = UUID("00000000-0000-0000-0000-000000000001")
-_PERSON_ID = UUID("00000000-0000-0000-0000-000000000002")
-_WORK_ID = UUID("00000000-0000-0000-0000-000000000003")
-_EXPERIENCE_ID = UUID("00000000-0000-0000-0000-000000000004")
+from evals.fixtures import EXPERIENCE_ID, WORK_ID, build_synthetic_graph
 
 
 @dataclass(frozen=True)
@@ -115,9 +103,9 @@ def _evaluate_normal_source(case: EvaluationCase) -> LocalEvaluationResult:
 
 
 def _evaluate_project_selection(case: EvaluationCase) -> LocalEvaluationResult:
-    graph = _synthetic_graph()
+    graph = build_synthetic_graph()
     selection = select_relevant_knowledge(graph, str(case.input["requirements"]))
-    work = next(entity for entity in selection.graph.entities if entity.id == _WORK_ID)
+    work = next(entity for entity in selection.graph.entities if entity.id == WORK_ID)
     output = GraphBOutput(
         blocks=[
             WorksBlock(
@@ -139,14 +127,13 @@ def _evaluate_project_selection(case: EvaluationCase) -> LocalEvaluationResult:
     passed = (not issues) == expected_valid
     passed = passed and block_types == expected_types and "Work" in selection.selected_classes
     detail = (
-        f"selected={sorted(selection.selected_classes)}, "
-        f"blocks={block_types}, issues={len(issues)}"
+        f"selected={sorted(selection.selected_classes)}, blocks={block_types}, issues={len(issues)}"
     )
     return LocalEvaluationResult(case.case_id, passed, detail)
 
 
 def _evaluate_partial_generation(case: EvaluationCase) -> LocalEvaluationResult:
-    graph = _synthetic_graph()
+    graph = build_synthetic_graph()
     selection = select_relevant_knowledge(graph, str(case.input["requirements"]))
     output = GraphBOutput(
         blocks=[
@@ -154,7 +141,7 @@ def _evaluate_partial_generation(case: EvaluationCase) -> LocalEvaluationResult:
                 type="experience",
                 items=[
                     TimelineItem(
-                        entity_id=str(_EXPERIENCE_ID),
+                        entity_id=str(EXPERIENCE_ID),
                         start_date="",
                         organization="",
                         role="Developer",
@@ -176,14 +163,13 @@ def _evaluate_partial_generation(case: EvaluationCase) -> LocalEvaluationResult:
         and empty_blocks == expected_empty_blocks
     )
     detail = (
-        f"selected={sorted(selection.selected_classes)}, "
-        f"blocks={block_types}, issues={len(issues)}"
+        f"selected={sorted(selection.selected_classes)}, blocks={block_types}, issues={len(issues)}"
     )
     return LocalEvaluationResult(case.case_id, passed, detail)
 
 
 def _evaluate_invalid_reference(case: EvaluationCase) -> LocalEvaluationResult:
-    graph = _synthetic_graph()
+    graph = build_synthetic_graph()
     selection = select_relevant_knowledge(graph)
     output = GraphBOutput(
         blocks=[
@@ -206,64 +192,6 @@ def _evaluate_invalid_reference(case: EvaluationCase) -> LocalEvaluationResult:
     passed = (not issues) == expected_valid and issue_codes == expected_codes
     detail = f"valid={not issues}, issue_codes={issue_codes}"
     return LocalEvaluationResult(case.case_id, passed, detail)
-
-
-def _synthetic_graph() -> ActiveKnowledgeGraph:
-    entities = [
-        ActiveKnowledgeEntity(
-            id=_PERSON_ID,
-            graph_id=_GRAPH_ID,
-            class_type="Person",
-            created_at=_NOW,
-            updated_at=_NOW,
-        ),
-        ActiveKnowledgeEntity(
-            id=_WORK_ID,
-            graph_id=_GRAPH_ID,
-            class_type="Work",
-            created_at=_NOW,
-            updated_at=_NOW,
-        ),
-        ActiveKnowledgeEntity(
-            id=_EXPERIENCE_ID,
-            graph_id=_GRAPH_ID,
-            class_type="Experience",
-            created_at=_NOW,
-            updated_at=_NOW,
-        ),
-    ]
-    relations = [
-        ActiveKnowledgeRelation(
-            id=UUID("00000000-0000-0000-0000-000000000011"),
-            graph_id=_GRAPH_ID,
-            subject_entity_id=_PERSON_ID,
-            predicate="participatedIn",
-            object_entity_id=_WORK_ID,
-            origin="user",
-            provenance="profile",
-            updated_at=_NOW,
-        ),
-        ActiveKnowledgeRelation(
-            id=UUID("00000000-0000-0000-0000-000000000012"),
-            graph_id=_GRAPH_ID,
-            subject_entity_id=_PERSON_ID,
-            predicate="hasExperience",
-            object_entity_id=_EXPERIENCE_ID,
-            origin="user",
-            provenance="profile",
-            updated_at=_NOW,
-        ),
-    ]
-    return ActiveKnowledgeGraph(
-        id=_GRAPH_ID,
-        user_id=1,
-        ontology_schema_version="1.1",
-        version=1,
-        created_at=_NOW,
-        updated_at=_NOW,
-        entities=entities,
-        relations=relations,
-    )
 
 
 def main() -> int:

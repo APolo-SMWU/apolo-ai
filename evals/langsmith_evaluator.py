@@ -53,3 +53,16 @@ def run_langsmith_evaluation(
         description="APolo AI Graph A·Graph B 합성 평가",
         metadata={"apoloEvaluationVersion": "1", "synthetic": True},
     )
+
+
+def main() -> int:
+    """전체 합성 Dataset을 Graph A·Graph B target으로 평가"""
+    from evals.targets import evaluation_target
+
+    result = run_langsmith_evaluation(evaluation_target)
+    print(f"experiment={result}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
