@@ -37,6 +37,8 @@ def persist_extracted_candidates(
     *,
     now: datetime,
     force_candidate_fact_indexes: frozenset[int] = frozenset(),
+    current_source_document_id: UUID | None = None,
+    current_source_content_hash: str | None = None,
 ) -> PersistedExtraction:
     """Fact·Relation을 source 추출값으로 저장, 충돌 후보는 candidate로 보관
 
@@ -54,6 +56,19 @@ def persist_extracted_candidates(
         _ensure_active_entities(cursor, graph_id, set(entity_ids.values()))
         facts_by_entity = _load_existing_facts(cursor, graph_id, set(entity_ids.values()))
         relations_by_subject = _load_existing_relations(cursor, graph_id)
+        stale_fact_keys = _load_stale_source_fact_keys(
+            cursor,
+            graph_id,
+            set(entity_ids.values()),
+            current_source_document_id,
+            current_source_content_hash,
+        )
+        stale_relation_keys = _load_stale_source_relation_keys(
+            cursor,
+            graph_id,
+            current_source_document_id,
+            current_source_content_hash,
+        )
         fact_ids: dict[int, UUID] = {}
         relation_ids: dict[int, UUID] = {}
         skipped_facts: list[int] = []
@@ -75,6 +90,8 @@ def persist_extracted_candidates(
             status = (
                 "candidate"
                 if index in force_candidate_fact_indexes
+                else "active"
+                if key in stale_fact_keys
                 else "active"
                 if multi_valued or not existing
                 else "candidate"
@@ -115,7 +132,9 @@ def persist_extracted_candidates(
                 continue
             status = (
                 "active"
-                if relation.predicate in _MULTI_TARGET_RELATIONS or not existing
+                if key in stale_relation_keys
+                or relation.predicate in _MULTI_TARGET_RELATIONS
+                or not existing
                 else "candidate"
             )
             relation_id = uuid4()
@@ -141,6 +160,110 @@ def persist_extracted_candidates(
     return PersistedExtraction(
         fact_ids, relation_ids, tuple(skipped_facts), tuple(skipped_relations)
     )
+
+
+def _load_stale_source_fact_keys(
+    cursor: psycopg.Cursor,
+    graph_id: UUID,
+    entity_ids: set[UUID],
+    source_document_id: UUID | None,
+    source_content_hash: str | None,
+) -> set[tuple[UUID, str]]:
+    """현재 Source만 갱신된 단일 Fact를 active로 대체할 식별자 조회"""
+    if not entity_ids or source_document_id is None or source_content_hash is None:
+        return set()
+    cursor.execute(
+        """
+        SELECT fact.entity_id, fact.predicate
+        FROM ai.facts fact
+        JOIN ai.fact_evidence link
+          ON link.graph_id=%s AND link.fact_id=fact.id
+        JOIN ai.evidence evidence
+          ON evidence.graph_id=link.graph_id AND evidence.id=link.evidence_id
+        LEFT JOIN ai.source_documents document
+          ON document.graph_id=evidence.graph_id
+         AND document.id=evidence.source_document_id
+        WHERE fact.entity_id=ANY(%s)
+          AND fact.origin='extracted' AND fact.provenance='source'
+        GROUP BY fact.id, fact.entity_id, fact.predicate
+        HAVING BOOL_OR(
+            evidence.source_document_id=%s
+            AND evidence.source_content_hash<>%s
+        )
+        AND NOT BOOL_OR(
+            (
+                evidence.source_document_id=%s
+                AND evidence.source_content_hash=%s
+            )
+            OR (
+                evidence.source_document_id<>%s
+                AND document.processed_content_hash IS NOT NULL
+                AND evidence.source_content_hash=document.processed_content_hash
+            )
+        )
+        """,
+        (
+            graph_id,
+            list(entity_ids),
+            source_document_id,
+            source_content_hash,
+            source_document_id,
+            source_content_hash,
+            source_document_id,
+        ),
+    )
+    return {(entity_id, predicate) for entity_id, predicate in cursor.fetchall()}
+
+
+def _load_stale_source_relation_keys(
+    cursor: psycopg.Cursor,
+    graph_id: UUID,
+    source_document_id: UUID | None,
+    source_content_hash: str | None,
+) -> set[tuple[UUID, str]]:
+    """현재 Source만 갱신된 단일 Relation을 active로 대체할 식별자 조회"""
+    if source_document_id is None or source_content_hash is None:
+        return set()
+    cursor.execute(
+        """
+        SELECT relation.subject_entity_id, relation.predicate
+        FROM ai.relations relation
+        JOIN ai.relation_evidence link
+          ON link.graph_id=relation.graph_id AND link.relation_id=relation.id
+        JOIN ai.evidence evidence
+          ON evidence.graph_id=link.graph_id AND evidence.id=link.evidence_id
+        LEFT JOIN ai.source_documents document
+          ON document.graph_id=evidence.graph_id
+         AND document.id=evidence.source_document_id
+        WHERE relation.graph_id=%s
+          AND relation.origin='extracted' AND relation.provenance='source'
+        GROUP BY relation.id, relation.subject_entity_id, relation.predicate
+        HAVING BOOL_OR(
+            evidence.source_document_id=%s
+            AND evidence.source_content_hash<>%s
+        )
+        AND NOT BOOL_OR(
+            (
+                evidence.source_document_id=%s
+                AND evidence.source_content_hash=%s
+            )
+            OR (
+                evidence.source_document_id<>%s
+                AND document.processed_content_hash IS NOT NULL
+                AND evidence.source_content_hash=document.processed_content_hash
+            )
+        )
+        """,
+        (
+            graph_id,
+            source_document_id,
+            source_content_hash,
+            source_document_id,
+            source_content_hash,
+            source_document_id,
+        ),
+    )
+    return {(subject_id, predicate) for subject_id, predicate in cursor.fetchall()}
 
 
 @dataclass(frozen=True)
