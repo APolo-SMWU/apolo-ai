@@ -5,7 +5,36 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import tuple_row
 
-from apolo.contracts.source import Evidence
+from apolo.contracts.source import Evidence, EvidenceCandidate
+
+
+def load_matching_source_evidence(
+    connection: psycopg.Connection,
+    graph_id: UUID,
+    source_document_id: UUID,
+    source_content_hash: str,
+    candidates: list[EvidenceCandidate],
+) -> list[Evidence]:
+    """같은 KG·Source·원문 해시의 수집 근거만 후보 조각에 대응"""
+    pairs = {(candidate.snippet, candidate.locator) for candidate in candidates}
+    if not pairs:
+        return []
+    with connection.cursor(row_factory=tuple_row) as cursor:
+        cursor.execute(
+            "SELECT (to_jsonb(e)-'graph_id')::text FROM ai.evidence e "
+            "WHERE e.graph_id=%s AND e.source_document_id=%s "
+            "AND e.source_content_hash=%s ORDER BY e.created_at DESC, e.id",
+            (graph_id, source_document_id, source_content_hash),
+        )
+        found: list[Evidence] = []
+        seen: set[tuple[str, str]] = set()
+        for row in cursor.fetchall():
+            evidence = Evidence.model_validate_json(row[0])
+            pair = (evidence.snippet, evidence.locator)
+            if pair in pairs and pair not in seen:
+                found.append(evidence)
+                seen.add(pair)
+        return found
 
 
 def save_evidence(

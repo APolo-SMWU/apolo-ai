@@ -58,8 +58,8 @@ def save_source_capture(
     snapshot = SourceSnapshot.model_validate(snapshot.model_dump())
     if (document.graph_id, document.source_key) != (snapshot.graph_id, snapshot.source_key):
         raise ValueError("문서와 Snapshot의 KG·소스 키가 일치해야 합니다.")
-    if document.processed_at is not None:
-        raise ValueError("수집 저장은 분석 완료 시각을 설정하지 않습니다.")
+    if document.processed_at is not None or document.processed_content_hash is not None:
+        raise ValueError("수집 저장은 분석 완료 정보를 설정하지 않습니다.")
 
     with connection.transaction(), connection.cursor(row_factory=tuple_row) as cursor:
         cursor.execute(

@@ -42,7 +42,9 @@ async def collect_public_sources(
 
         try:
             if hostname in {"github.com", "www.github.com"}:
-                result = await collect_github_sources(source_url, client=client)
+                result = await collect_github_sources(
+                    source_url, client=client, select_files=True
+                )
             elif hostname in {
                 "notion.so",
                 "www.notion.so",

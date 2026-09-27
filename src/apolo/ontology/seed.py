@@ -6,7 +6,9 @@
 
 from typing import Final, Literal
 
-SEED_ONTOLOGY_VERSION: Final = "1.0"
+from apolo.ontology.personal import ONTOLOGY_VERSION
+
+SEED_ONTOLOGY_VERSION: Final = ONTOLOGY_VERSION
 
 SeedClassType = Literal["Person", "Education", "Experience", "Organization", "Channel"]
 SeedRelationType = Literal["hasEducation", "hasExperience", "hasChannel", "atOrganization"]

@@ -21,28 +21,83 @@ def load_seed_by_user_id(connection: psycopg.Connection, user_id: int) -> SeedKn
 
     한 SQL 문으로 같은 시점의 KG·Entity·Fact·Relation을 읽는다.
     목록은 ID 순서이며 최초 입력 순서를 의미하지 않는다.
-    외부 추출·철회 데이터가 섞인 전체 KG 조회는 추후 별도 모델로 확장해야 한다.
+    Seed 범위는 provenance='profile'인 Fact·Relation, 사용자 본인(active Person),
+    그리고 이 Fact·Relation이 가리키는 Entity다. 외부 추출 등 다른 출처는 제외한다.
+    다른 출처까지 포함한 전체 KG 조회는 별도 모델로 확장해야 한다.
     연결과 트랜잭션의 종료는 호출부 책임이다.
     """
     with connection.cursor(row_factory=tuple_row) as cursor:
+        # Seed 모델의 필드만 명시적으로 읽는다. 테이블에 컬럼이 추가되어도 조회가 깨지지 않는다.
         cursor.execute(
             """
-            SELECT (to_jsonb(g) || jsonb_build_object(
+            SELECT jsonb_build_object(
+                'id', g.id,
+                'user_id', g.user_id,
+                'ontology_schema_version', g.ontology_schema_version,
+                'version', g.version,
+                'created_at', g.created_at,
+                'updated_at', g.updated_at,
                 'entities', COALESCE((
-                    SELECT jsonb_agg(to_jsonb(e) ORDER BY e.id)
-                    FROM ai.entities e WHERE e.graph_id = g.id
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'id', e.id,
+                        'graph_id', e.graph_id,
+                        'class_type', e.class_type,
+                        'status', e.status,
+                        'created_at', e.created_at,
+                        'updated_at', e.updated_at
+                    ) ORDER BY e.id)
+                    FROM ai.entities e
+                    WHERE e.graph_id = g.id
+                      AND (
+                        -- 사용자 본인. DB 제약상 그래프당 active Person은 하나뿐이다.
+                        (e.class_type = 'Person' AND e.status = 'active')
+                        -- 프로필 Fact의 대상
+                        OR EXISTS (
+                            SELECT 1 FROM ai.facts f
+                            WHERE f.entity_id = e.id AND f.provenance = 'profile'
+                        )
+                        -- 프로필 Relation의 출발·도착 대상
+                        OR EXISTS (
+                            SELECT 1 FROM ai.relations r
+                            WHERE r.graph_id = e.graph_id AND r.provenance = 'profile'
+                              AND e.id IN (r.subject_entity_id, r.object_entity_id)
+                        )
+                      )
                 ), '[]'::jsonb),
                 'facts', COALESCE((
-                    SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id)
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'id', f.id,
+                        'entity_id', f.entity_id,
+                        'predicate', f.predicate,
+                        'value', f.value,
+                        'value_type', f.value_type,
+                        'origin', f.origin,
+                        'confidence', f.confidence,
+                        'locked', f.locked,
+                        'status', f.status,
+                        'updated_at', f.updated_at
+                    ) ORDER BY f.id)
                     FROM ai.facts f
                     JOIN ai.entities e ON e.id = f.entity_id
-                    WHERE e.graph_id = g.id
+                    WHERE e.graph_id = g.id AND f.provenance = 'profile'
                 ), '[]'::jsonb),
                 'relations', COALESCE((
-                    SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id)
-                    FROM ai.relations r WHERE r.graph_id = g.id
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'id', r.id,
+                        'graph_id', r.graph_id,
+                        'subject_entity_id', r.subject_entity_id,
+                        'predicate', r.predicate,
+                        'object_entity_id', r.object_entity_id,
+                        'origin', r.origin,
+                        'confidence', r.confidence,
+                        'locked', r.locked,
+                        'status', r.status,
+                        'updated_at', r.updated_at
+                    ) ORDER BY r.id)
+                    FROM ai.relations r
+                    WHERE r.graph_id = g.id AND r.provenance = 'profile'
                 ), '[]'::jsonb)
-            ))::text
+            )::text
             FROM ai.knowledge_graphs g WHERE g.user_id = %s
             """,
             (user_id,),
@@ -98,10 +153,12 @@ def _insert_seed_items(cursor: psycopg.Cursor, seed: SeedKnowledgeGraph) -> None
             for e in seed.entities
         ],
     )
+    # Seed는 My Page 프로필로만 만들어지므로 Fact·Relation의 출처를 profile로 기록한다.
     cursor.executemany(
         "INSERT INTO ai.facts "
         "(id, entity_id, predicate, value, value_type, origin, confidence, locked, "
-        "status, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "status, updated_at, provenance) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'profile')",
         [
             (
                 f.id,
@@ -121,8 +178,8 @@ def _insert_seed_items(cursor: psycopg.Cursor, seed: SeedKnowledgeGraph) -> None
     cursor.executemany(
         "INSERT INTO ai.relations "
         "(id, graph_id, subject_entity_id, predicate, object_entity_id, origin, "
-        "confidence, locked, status, updated_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "confidence, locked, status, updated_at, provenance) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'profile')",
         [
             (
                 r.id,
@@ -150,8 +207,9 @@ def update_profile_seed(
     existing: SeedKnowledgeGraph,
     updated: SeedKnowledgeGraph,
 ) -> None:
-    """갱신 규칙으로 만든 결과를 한 트랜잭션으로 반영한다. 프로필 전용 KG에 한정한다.
+    """갱신 규칙으로 만든 결과를 한 트랜잭션으로 반영한다. 프로필 범위만 변경한다.
 
+    프로필에서 빠진 Entity도 다른 출처의 Fact·Relation이 참조하면 남긴다.
     모든 KG 갱신자는 버전 확인/증가 규칙을 따라야 한다.
     충돌 시 호출부가 최신 KG를 다시 읽고 갱신 결과를 계산해야 한다.
     기존 트랜잭션 안에서는 최종 commit을 호출부가 담당한다.
@@ -206,8 +264,13 @@ def update_profile_seed(
             "WHERE f.entity_id=e.id AND e.graph_id=%s AND f.id=ANY(%s)",
             (existing.id, remove_facts),
         )
+        # 프로필에서 빠진 Entity라도 다른 출처의 Fact·Relation이 남아 있으면 삭제하지 않는다.
+        # 프로필 Fact·Relation은 위에서 먼저 지웠으므로, 남은 참조는 다른 출처의 것이다.
         cursor.execute(
-            "DELETE FROM ai.entities WHERE graph_id=%s AND id=ANY(%s)",
+            "DELETE FROM ai.entities e WHERE e.graph_id=%s AND e.id=ANY(%s) "
+            "AND NOT EXISTS (SELECT 1 FROM ai.facts f WHERE f.entity_id=e.id) "
+            "AND NOT EXISTS (SELECT 1 FROM ai.relations r WHERE r.graph_id=e.graph_id "
+            "AND e.id IN (r.subject_entity_id, r.object_entity_id))",
             (existing.id, list(old_entities.keys() - new_entities.keys())),
         )
         cursor.executemany(
