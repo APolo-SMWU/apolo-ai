@@ -54,8 +54,19 @@ def persist_extracted_candidates(
     classes = {entity.ref: entity.class_type for entity in extraction.entities}
     with connection.transaction(), connection.cursor(row_factory=tuple_row) as cursor:
         _ensure_active_entities(cursor, graph_id, set(entity_ids.values()))
-        facts_by_entity = _load_existing_facts(cursor, graph_id, set(entity_ids.values()))
-        relations_by_subject = _load_existing_relations(cursor, graph_id)
+        facts_by_entity = _load_existing_facts(
+            cursor,
+            graph_id,
+            set(entity_ids.values()),
+            current_source_document_id=current_source_document_id,
+            current_source_content_hash=current_source_content_hash,
+        )
+        relations_by_subject = _load_existing_relations(
+            cursor,
+            graph_id,
+            current_source_document_id=current_source_document_id,
+            current_source_content_hash=current_source_content_hash,
+        )
         stale_fact_keys = _load_stale_source_fact_keys(
             cursor,
             graph_id,
@@ -84,6 +95,8 @@ def persist_extracted_candidates(
             existing = facts_by_entity.setdefault(key, [])
             same = next((item for item in existing if item.value == fact.value), None)
             if same is not None:
+                if index not in force_candidate_fact_indexes:
+                    _promote_fact_if_unblocked(cursor, same, existing, now=now)
                 fact_ids[index] = same.id
                 continue
             multi_valued = (class_type, fact.predicate) in MULTI_VALUED_PROPERTIES
@@ -93,7 +106,7 @@ def persist_extracted_candidates(
                 else "active"
                 if key in stale_fact_keys
                 else "active"
-                if multi_valued or not existing
+                if multi_valued or not any(_blocks_new_fact(item) for item in existing)
                 else "candidate"
             )
             fact_id = uuid4()
@@ -114,7 +127,7 @@ def persist_extracted_candidates(
                     now,
                 ),
             )
-            item = _StoredFact(fact_id, fact.value, status)
+            item = _StoredFact(fact_id, fact.value, status, "source", False)
             existing.append(item)
             fact_ids[index] = fact_id
 
@@ -128,13 +141,14 @@ def persist_extracted_candidates(
             existing = relations_by_subject.setdefault(key, [])
             same = next((item for item in existing if item.object_entity_id == object_id), None)
             if same is not None:
+                _promote_relation_if_unblocked(cursor, same, existing, now=now)
                 relation_ids[index] = same.id
                 continue
             status = (
                 "active"
                 if key in stale_relation_keys
                 or relation.predicate in _MULTI_TARGET_RELATIONS
-                or not existing
+                or not any(_blocks_new_relation(item) for item in existing)
                 else "candidate"
             )
             relation_id = uuid4()
@@ -154,7 +168,7 @@ def persist_extracted_candidates(
                     now,
                 ),
             )
-            existing.append(_StoredRelation(relation_id, object_id, status))
+            existing.append(_StoredRelation(relation_id, object_id, status, "source", False))
             relation_ids[index] = relation_id
 
     return PersistedExtraction(
@@ -271,6 +285,8 @@ class _StoredFact:
     id: UUID
     value: str | bool
     status: str
+    provenance: str
+    has_current_evidence: bool
 
 
 @dataclass(frozen=True)
@@ -278,38 +294,154 @@ class _StoredRelation:
     id: UUID
     object_entity_id: UUID
     status: str
+    provenance: str
+    has_current_evidence: bool
+
+
+def _blocks_new_fact(item: _StoredFact) -> bool:
+    """현재 유효한 active Fact만 새 단일값을 candidate로 보류"""
+    return item.status == "active" and (
+        item.provenance == "profile" or item.has_current_evidence
+    )
+
+
+def _promote_fact_if_unblocked(
+    cursor: psycopg.Cursor,
+    same: _StoredFact,
+    existing: list[_StoredFact],
+    *,
+    now: datetime,
+) -> None:
+    """같은 값이 다시 확인되면 다른 유효 Fact가 없을 때 candidate를 active로 승격"""
+    if same.status != "candidate" or any(
+        item is not same and _blocks_new_fact(item) for item in existing
+    ):
+        return
+    cursor.execute(
+        "UPDATE ai.facts SET status='active',updated_at=%s WHERE id=%s AND status='candidate'",
+        (now, same.id),
+    )
+
+
+def _blocks_new_relation(item: _StoredRelation) -> bool:
+    """현재 유효한 active Relation만 새 단일 대상 연결을 candidate로 보류"""
+    return item.status == "active" and (
+        item.provenance == "profile" or item.has_current_evidence
+    )
+
+
+def _promote_relation_if_unblocked(
+    cursor: psycopg.Cursor,
+    same: _StoredRelation,
+    existing: list[_StoredRelation],
+    *,
+    now: datetime,
+) -> None:
+    """같은 Relation이 다시 확인되면 다른 유효 연결이 없을 때 candidate를 active로 승격"""
+    if same.status != "candidate" or any(
+        item is not same and _blocks_new_relation(item) for item in existing
+    ):
+        return
+    cursor.execute(
+        "UPDATE ai.relations SET status='active',updated_at=%s WHERE id=%s AND status='candidate'",
+        (now, same.id),
+    )
 
 
 def _load_existing_facts(
-    cursor: psycopg.Cursor, graph_id: UUID, entity_ids: set[UUID]
+    cursor: psycopg.Cursor,
+    graph_id: UUID,
+    entity_ids: set[UUID],
+    *,
+    current_source_document_id: UUID | None,
+    current_source_content_hash: str | None,
 ) -> dict[tuple[UUID, str], list[_StoredFact]]:
     if not entity_ids:
         return {}
     cursor.execute(
-        "SELECT f.id,f.entity_id,f.predicate,f.value,f.status FROM ai.facts f "
+        "SELECT f.id,f.entity_id,f.predicate,f.value,f.status,f.provenance, "
+        "EXISTS ("
+        "SELECT 1 FROM ai.fact_evidence link "
+        "JOIN ai.evidence evidence ON evidence.graph_id=link.graph_id "
+        "AND evidence.id=link.evidence_id "
+        "JOIN ai.source_documents document ON document.graph_id=evidence.graph_id "
+        "AND document.id=evidence.source_document_id "
+        "WHERE link.graph_id=e.graph_id AND link.fact_id=f.id "
+        "AND document.processed_content_hash IS NOT NULL "
+        "AND evidence.source_content_hash=document.processed_content_hash "
+        "AND NOT (%s::uuid IS NOT NULL AND document.id=%s "
+        "AND document.processed_content_hash IS DISTINCT FROM %s)"
+        ") "
+        "FROM ai.facts f "
         "JOIN ai.entities e ON e.id=f.entity_id "
         "WHERE e.graph_id=%s AND f.entity_id=ANY(%s) "
         "AND f.status IN ('active','candidate') FOR KEY SHARE OF f,e",
-        (graph_id, list(entity_ids)),
+        (
+            current_source_document_id,
+            current_source_document_id,
+            current_source_content_hash,
+            graph_id,
+            list(entity_ids),
+        ),
     )
     items: dict[tuple[UUID, str], list[_StoredFact]] = {}
-    for fact_id, entity_id, predicate, value, status in cursor.fetchall():
-        items.setdefault((entity_id, predicate), []).append(_StoredFact(fact_id, value, status))
+    for (
+        fact_id,
+        entity_id,
+        predicate,
+        value,
+        status,
+        provenance,
+        has_current_evidence,
+    ) in cursor.fetchall():
+        items.setdefault((entity_id, predicate), []).append(
+            _StoredFact(fact_id, value, status, provenance, has_current_evidence)
+        )
     return items
 
 
 def _load_existing_relations(
-    cursor: psycopg.Cursor, graph_id: UUID
+    cursor: psycopg.Cursor,
+    graph_id: UUID,
+    *,
+    current_source_document_id: UUID | None,
+    current_source_content_hash: str | None,
 ) -> dict[tuple[UUID, str], list[_StoredRelation]]:
     cursor.execute(
-        "SELECT id,subject_entity_id,predicate,object_entity_id,status FROM ai.relations "
-        "WHERE graph_id=%s AND status IN ('active','candidate') FOR KEY SHARE",
-        (graph_id,),
+        "SELECT r.id,r.subject_entity_id,r.predicate,r.object_entity_id,r.status,r.provenance, "
+        "EXISTS ("
+        "SELECT 1 FROM ai.relation_evidence link "
+        "JOIN ai.evidence evidence ON evidence.graph_id=link.graph_id "
+        "AND evidence.id=link.evidence_id "
+        "JOIN ai.source_documents document ON document.graph_id=evidence.graph_id "
+        "AND document.id=evidence.source_document_id "
+        "WHERE link.graph_id=r.graph_id AND link.relation_id=r.id "
+        "AND document.processed_content_hash IS NOT NULL "
+        "AND evidence.source_content_hash=document.processed_content_hash "
+        "AND NOT (%s::uuid IS NOT NULL AND document.id=%s "
+        "AND document.processed_content_hash IS DISTINCT FROM %s)"
+        ") "
+        "FROM ai.relations r "
+        "WHERE r.graph_id=%s AND r.status IN ('active','candidate') FOR KEY SHARE",
+        (
+            current_source_document_id,
+            current_source_document_id,
+            current_source_content_hash,
+            graph_id,
+        ),
     )
     items: dict[tuple[UUID, str], list[_StoredRelation]] = {}
-    for relation_id, subject_id, predicate, object_id, status in cursor.fetchall():
+    for (
+        relation_id,
+        subject_id,
+        predicate,
+        object_id,
+        status,
+        provenance,
+        has_current_evidence,
+    ) in cursor.fetchall():
         items.setdefault((subject_id, predicate), []).append(
-            _StoredRelation(relation_id, object_id, status)
+            _StoredRelation(relation_id, object_id, status, provenance, has_current_evidence)
         )
     return items
 
