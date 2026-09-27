@@ -9,8 +9,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from apolo.collectors.public import PublicCollectionWarning
-from apolo.contracts.generate import GenerateRequest, GenerateResponse, GenerateWarning
+from apolo.contracts.generate import (
+    GenerateMeta,
+    GenerateRequest,
+    GenerateResponse,
+    GenerateWarning,
+)
 from apolo.contracts.profile import SeedProfileInput
+from apolo.contracts.update_content import UpdateContentRequest
 from apolo.db.connection import connect_db
 from apolo.db.seed import load_seed_by_user_id
 from apolo.generation import build_graph_b_response, build_profile_only_response
@@ -77,6 +83,49 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
         
         logger.error("프로필 기반 생성 실패: %s", type(error).__name__)
         raise HTTPException(status_code=500, detail="콘텐츠 생성 중 오류가 발생했습니다.") from None
+
+
+@app.post("/update-content", response_model=GenerateResponse, response_model_exclude_none=True)
+async def update_content(request: UpdateContentRequest) -> GenerateResponse:
+    """기존 KG의 변경 Source를 재수집하고 Graph A를 실행한다."""
+    try:
+        with connect_db() as connection:
+            seed = load_seed_by_user_id(connection, request.user_id)
+            if seed is None:
+                return GenerateResponse(
+                    blocks=[],
+                    meta=GenerateMeta(
+                        ontology_schema_version="1.1", knowledge_graph_version=0
+                    ),
+                    warnings=[
+                        GenerateWarning(
+                            code="UPDATE_CONTENT_KG_NOT_FOUND",
+                            message="사용자의 기존 Knowledge Graph를 찾지 못했습니다.",
+                        )
+                    ],
+                )
+
+            warnings = await _run_graph_a(connection, seed.id, request.source_links)
+            graph_b_result, graph_b_warnings = _run_graph_b(
+                connection, request.user_id, ""
+            )
+            warnings.extend(graph_b_warnings)
+            if graph_b_result is not None:
+                response = build_graph_b_response(graph_b_result)
+            else:
+                latest_seed = load_seed_by_user_id(connection, request.user_id) or seed
+                response = GenerateResponse(
+                    blocks=[],
+                    meta=GenerateMeta(
+                        ontology_schema_version=latest_seed.ontology_schema_version,
+                        knowledge_graph_version=latest_seed.version,
+                    ),
+                )
+            response.warnings.extend(warnings)
+            return response
+    except Exception:
+        logger.error("Source 갱신 실패", exc_info=True)
+        raise HTTPException(status_code=500, detail="콘텐츠 갱신 중 오류가 발생했습니다.") from None
 
 
 async def _run_graph_a(
