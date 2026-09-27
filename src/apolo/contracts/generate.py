@@ -2,9 +2,22 @@
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from apolo.contracts.profile import SeedProfileInput
+
+ShortText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+LongText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)
+]
+SkillText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+]
+LinkLabel = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)
+]
 
 
 class GenerateRequest(SeedProfileInput):
@@ -26,8 +39,19 @@ class _ResponseModel(BaseModel):
 
 
 class ProjectLink(_ResponseModel):
-    label: str
+    label: LinkLabel
     href: str
+
+    @field_validator("href")
+    @classmethod
+    def require_http_url(cls, value: str) -> str:
+        """프로젝트 링크를 HTTP(S) URL로 제한한다."""
+        from urllib.parse import urlparse
+
+        parsed = urlparse(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("href must be an http(s) URL")
+        return value.strip()
 
 
 class AboutBlock(_ResponseModel):
@@ -35,7 +59,7 @@ class AboutBlock(_ResponseModel):
 
     type: Literal["about"] = "about"
     visible: bool = True
-    body: str
+    body: LongText
 
 
 TimelineItemKind = Literal[
@@ -54,9 +78,9 @@ class TimelineItem(_ResponseModel):
     entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
     start_date: TimelineDate = Field(alias="startDate")
     end_date: TimelineEndDate | None = Field(default=None, alias="endDate")
-    organization: str
-    role: str | None = None
-    description: str | None = None
+    organization: Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
+    role: ShortText | None = None
+    description: LongText | None = None
     kind: TimelineItemKind | None = None
 
 
@@ -71,12 +95,25 @@ class WorkItem(_ResponseModel):
 
     entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
     kind: Literal["project", "publication", "opensource"]
-    title: str
-    role: str | None = None
-    skills: list[str] | None = None
-    description: str
+    title: ShortText
+    role: ShortText | None = None
+    skills: list[SkillText] | None = None
+    description: LongText
     image_url: str | None = Field(default=None, alias="imageUrl")
     links: list[ProjectLink] = Field(default_factory=list)
+
+    @field_validator("image_url")
+    @classmethod
+    def require_http_image_url(cls, value: str | None) -> str | None:
+        """이미지 주소가 있으면 HTTP(S) URL로 제한한다."""
+        if value is None:
+            return None
+        from urllib.parse import urlparse
+
+        parsed = urlparse(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("imageUrl must be an http(s) URL")
+        return value.strip()
 
 
 class WorksBlock(_ResponseModel):
@@ -86,8 +123,8 @@ class WorksBlock(_ResponseModel):
 
 
 class SkillCategory(_ResponseModel):
-    category: str = Field(min_length=1, pattern=r"\S")
-    items: list[str]
+    category: SkillText
+    items: list[SkillText]
 
 
 class SkillsBlock(_ResponseModel):

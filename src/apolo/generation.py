@@ -13,6 +13,7 @@ from apolo.contracts.generate import (
     TimelineItem,
 )
 from apolo.contracts.kg import SeedKnowledgeGraph
+from apolo.graph_b.service import GraphBGenerationResult
 from apolo.seed.validation import validate_seed_graph
 
 
@@ -86,5 +87,19 @@ def build_profile_only_response(seed: SeedKnowledgeGraph) -> GenerateResponse:
         meta=GenerateMeta(
             ontology_schema_version=seed.ontology_schema_version,
             knowledge_graph_version=seed.version,
+        ),
+    )
+
+
+def build_graph_b_response(result: GraphBGenerationResult) -> GenerateResponse:
+    """검증된 Graph B 블록과 현재 KG 메타데이터를 API 응답으로 변환"""
+    if not result.is_valid:
+        raise ValueError("검증되지 않은 Graph B 결과는 응답에 사용할 수 없습니다.")
+    graph = result.selection.graph
+    return GenerateResponse(
+        blocks=result.output.blocks,
+        meta=GenerateMeta(
+            ontology_schema_version=graph.ontology_schema_version,
+            knowledge_graph_version=graph.version,
         ),
     )

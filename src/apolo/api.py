@@ -13,9 +13,12 @@ from apolo.contracts.generate import GenerateRequest, GenerateResponse, Generate
 from apolo.contracts.profile import SeedProfileInput
 from apolo.db.connection import connect_db
 from apolo.db.seed import load_seed_by_user_id
-from apolo.generation import build_profile_only_response
+from apolo.generation import build_graph_b_response, build_profile_only_response
 from apolo.graph_a.processing import GraphAProcessingWarning
 from apolo.graph_a.workflow import build_graph_a
+from apolo.graph_b.client import OpenAIContentGenerationClient
+from apolo.graph_b.input import load_graph_b_input
+from apolo.graph_b.service import GraphBGenerationResult, generate_graph_b_content
 from apolo.llm.client import OpenAIExtractionClient
 from apolo.llm.config import load_langsmith_settings, load_llm_settings
 from apolo.seed.persistence import ensure_profile_seed
@@ -38,7 +41,7 @@ def health() -> dict[str, str]:
 
 @app.post("/generate", response_model=GenerateResponse, response_model_exclude_none=True)
 async def generate(request: GenerateRequest) -> GenerateResponse:
-    """프로필 Seed 저장 후 외부 Source를 Graph A로 반영한다."""
+    """프로필 Seed·외부 Source를 반영한 뒤 Graph B 콘텐츠를 생성한다."""
     source = SeedProfileInput(
         userId=request.user_id,
         userType=request.user_type,
@@ -57,19 +60,18 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
                     await _run_graph_a(connection, seed.id, source_urls)
                 )
 
-            if "SOURCE_PROCESSING_FAILED" in {warning.code for warning in warnings}:
-                response = build_profile_only_response(seed)
+            graph_b_result, graph_b_warnings = _run_graph_b(
+                connection, request.user_id, request.requirements
+            )
+            warnings.extend(graph_b_warnings)
+            if graph_b_result is not None:
+                response = build_graph_b_response(graph_b_result)
             else:
                 latest_seed = load_seed_by_user_id(connection, request.user_id)
                 if latest_seed is None:
                     latest_seed = seed
                 response = build_profile_only_response(latest_seed)
             response.warnings.extend(warnings)
-            if request.requirements.strip():
-                response.warnings.append(GenerateWarning(
-                    code="REQUIREMENTS_NOT_IMPLEMENTED",
-                    message="요구사항의 사실 추출과 콘텐츠 선별은 아직 반영하지 않았습니다.",
-                ))
         return response
     except Exception as error:
         
@@ -129,3 +131,45 @@ def _collection_warning(warning: PublicCollectionWarning) -> GenerateWarning:
 def _graph_warning(warning: GraphAProcessingWarning) -> GenerateWarning:
     """Graph A 경고를 Backend 응답 계약으로 변환"""
     return GenerateWarning(source=warning.source_key, code=warning.code, message=warning.message)
+
+
+def _run_graph_b(
+    connection,
+    user_id: int,
+    requirements: str,
+) -> tuple[GraphBGenerationResult | None, list[GenerateWarning]]:
+    """최신 KG에서 Graph B를 실행하고 API 경고로 변환"""
+    try:
+        graph_b_input = load_graph_b_input(connection, user_id, requirements)
+        if graph_b_input is None:
+            return None, [
+                GenerateWarning(
+                    code="GRAPH_B_INPUT_UNAVAILABLE",
+                    message="현재 유효한 KG를 찾지 못해 Graph B를 실행하지 못했습니다.",
+                )
+            ]
+        result = generate_graph_b_content(
+            graph_b_input.graph,
+            graph_b_input.requirements,
+            OpenAIContentGenerationClient(
+                load_llm_settings(),
+                load_langsmith_settings(),
+            ),
+        )
+    except Exception:
+        logger.error("Graph B 처리 실패", exc_info=True)
+        return None, [
+            GenerateWarning(
+                code="GRAPH_B_GENERATION_FAILED",
+                message="콘텐츠 생성에 실패했습니다. 프로필 정보만 반환합니다.",
+            )
+        ]
+
+    if not result.is_valid:
+        return None, [
+            GenerateWarning(
+                code="GRAPH_B_OUTPUT_INVALID",
+                message="생성 결과가 현재 KG와 일치하지 않아 콘텐츠를 사용하지 않았습니다.",
+            )
+        ]
+    return result, []
