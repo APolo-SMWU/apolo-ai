@@ -189,9 +189,9 @@ def _same_entity(candidate: ExistingEntity, stored: ExistingEntity) -> bool:
     if kind == "Credential":
         return (
             _shared(candidate, stored, "title")
-            and _shared(candidate, stored, "issuerName")
             and _has_values(candidate, stored, "date")
             and _compatible(candidate, stored, "date")
+            and _compatible(candidate, stored, "issuerName")
             and _compatible(candidate, stored, "kind")
         )
     if kind == "Education":
