@@ -19,7 +19,7 @@ SeedValueType = Literal["string", "uri"]
 SEED_PROPERTY_TYPES: Final[dict[SeedClassType, dict[str, tuple[SeedValueType, ...]]]] = {
     "Person": {"name": ("string",), "role": ("string",)},
     "Education": {"major": ("string",)},
-    "Experience": {"role": ("string",), "unit": ("string",)},
+    "Experience": {"role": ("string",), "department": ("string",)},
     "Organization": {"name": ("string",), "type": ("string",)},
     "Channel": {"kind": ("string",), "value": ("string", "uri"), "scope": ("string",)},
 }

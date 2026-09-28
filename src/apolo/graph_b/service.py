@@ -6,6 +6,7 @@ from typing import Protocol
 from apolo.content_selection.rules import ContentSelection, select_relevant_knowledge
 from apolo.contracts.content import GraphBOutput
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
+from apolo.graph_b.normalization import normalize_graph_b_output
 from apolo.graph_b.validation import ContentValidationIssue, validate_graph_b_output
 
 
@@ -36,6 +37,6 @@ def generate_graph_b_content(
 ) -> GraphBGenerationResult:
     """현재 KG에서 콘텐츠 후보를 선별하고 생성 결과를 같은 후보로 검증"""
     selection = select_relevant_knowledge(graph, requirements)
-    output = generator.generate(selection, requirements)
+    output = normalize_graph_b_output(generator.generate(selection, requirements), selection.graph)
     issues = tuple(validate_graph_b_output(output, selection.graph))
     return GraphBGenerationResult(selection=selection, output=output, issues=issues)

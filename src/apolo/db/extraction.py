@@ -9,13 +9,20 @@ from psycopg.pq import TransactionStatus
 from psycopg.rows import tuple_row
 from psycopg.types.json import Jsonb
 
-from apolo.contracts.extraction import ExtractionResult
+from apolo.contracts.extraction import SELF_REF, ExtractionResult
 from apolo.extraction.resolution import EntityResolution
 from apolo.ontology.personal import MULTI_VALUED_PROPERTIES, PROPERTY_TYPES
 
 # 같은 출발 Entity에서 여러 대상이 자연스러운 Relation이다.
 _MULTI_TARGET_RELATIONS = frozenset(
-    {"hasEducation", "hasExperience", "holds", "participatedIn", "usesSkill", "broader"}
+    {
+        "hasEducation",
+        "hasExperience",
+        "holds",
+        "hasSkill",
+        "participatedIn",
+        "usesSkill",
+    }
 )
 
 
@@ -53,6 +60,11 @@ def persist_extracted_candidates(
     entity_ids = resolution.matched | resolution.new_ids
     classes = {entity.ref: entity.class_type for entity in extraction.entities}
     with connection.transaction(), connection.cursor(row_factory=tuple_row) as cursor:
+        if any(
+            SELF_REF in (relation.subject_ref, relation.object_ref)
+            for relation in extraction.relations
+        ):
+            entity_ids = {**entity_ids, SELF_REF: _load_person_id(cursor, graph_id)}
         _ensure_active_entities(cursor, graph_id, set(entity_ids.values()))
         facts_by_entity = _load_existing_facts(
             cursor,
@@ -457,3 +469,17 @@ def _ensure_active_entities(cursor: psycopg.Cursor, graph_id: UUID, entity_ids: 
     )
     if {row[0] for row in cursor.fetchall()} != entity_ids:
         raise ValueError("추출 Entity는 같은 KG의 active Entity여야 합니다.")
+
+
+def _load_person_id(cursor: psycopg.Cursor, graph_id: UUID) -> UUID:
+    """self 관계를 저장할 현재 KG의 유일한 active Person을 조회"""
+    cursor.execute(
+        "SELECT id FROM ai.entities "
+        "WHERE graph_id=%s AND class_type='Person' AND status='active' "
+        "ORDER BY id LIMIT 2",
+        (graph_id,),
+    )
+    rows = cursor.fetchall()
+    if len(rows) != 1:
+        raise ValueError("self 관계를 저장하려면 active Person Entity가 정확히 하나 필요합니다.")
+    return rows[0][0]

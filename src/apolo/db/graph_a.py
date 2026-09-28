@@ -16,6 +16,7 @@ from apolo.db.extraction import PersistedExtraction, persist_extracted_candidate
 from apolo.db.resolution import stage_extracted_entities
 from apolo.db.source import PersistedCollectedSource
 from apolo.extraction.evidence import matching_source_evidence, validate_source_evidence
+from apolo.extraction.ownership import add_source_ownership_relations
 from apolo.extraction.resolution import EntityResolution
 from apolo.extraction.validation import ExtractionIssue, validate_extraction
 
@@ -48,7 +49,8 @@ def apply_source_extraction(
     _check_source_state(graph_id, source, stored)
 
     grounded = validate_source_evidence(extraction, source)
-    checked = validate_extraction(grounded.result)
+    ownership_augmented = add_source_ownership_relations(source, grounded.result)
+    checked = validate_extraction(ownership_augmented)
     # 한 응답 안에서 충돌한 값은 온톨로지 검증이 남긴 candidate용 Fact다.
     persistent = checked.result.model_copy(
         update={"facts": [*checked.result.facts, *checked.uncertain]}

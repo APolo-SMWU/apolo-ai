@@ -5,12 +5,13 @@
 
 from typing import Final, Literal
 
-ONTOLOGY_VERSION: Final = "1.1"
+ONTOLOGY_VERSION: Final = "2.0"
 
 ClassType = Literal[
     "Person",
     "Education",
     "Experience",
+    "Activity",
     "Work",
     "Credential",
     "Skill",
@@ -22,11 +23,11 @@ RelationType = Literal[
     "hasExperience",
     "participatedIn",
     "holds",
+    "hasSkill",
     "hasChannel",
     "atOrganization",
     "usesSkill",
     "partOf",
-    "broader",
 ]
 ValueType = Literal["string", "uri", "date", "boolean"]
 
@@ -38,25 +39,29 @@ PROPERTY_TYPES: Final[dict[ClassType, dict[str, tuple[ValueType, ...]]]] = {
         "name": ("string",),
         "role": ("string",),
         "interests": ("string",),
-        "photoRef": ("uri",),
     },
-    # 재학 상태(status)는 isCurrent·end·expectedEnd로 표현하고 MVP에서는 두지 않는다.
     "Education": {
         "major": ("string",),
         "degree": ("string",),
         "start": ("date",),
         "end": ("date",),
-        "expectedEnd": ("date",),
         "isCurrent": ("boolean",),
     },
     "Experience": {
         "role": ("string",),
-        "unit": ("string",),
+        "department": ("string",),
         "kind": ("string",),
         "start": ("date",),
         "end": ("date",),
         "isCurrent": ("boolean",),
-        "sourceDescription": ("string",),
+    },
+    "Activity": {
+        "name": ("string",),
+        "role": ("string",),
+        "kind": ("string",),
+        "start": ("date",),
+        "end": ("date",),
+        "isCurrent": ("boolean",),
     },
     "Work": {
         "title": ("string",),
@@ -64,7 +69,6 @@ PROPERTY_TYPES: Final[dict[ClassType, dict[str, tuple[ValueType, ...]]]] = {
         "role": ("string",),
         "start": ("date",),
         "end": ("date",),
-        "sourceDescription": ("string",),
         "url": ("uri",),
     },
     "Credential": {
@@ -77,17 +81,14 @@ PROPERTY_TYPES: Final[dict[ClassType, dict[str, tuple[ValueType, ...]]]] = {
     "Skill": {
         "name": ("string",),
         "category": ("string",),
-        "proficiency": ("string",),
     },
     "Organization": {
         "name": ("string",),
         "type": ("string",),
-        "address": ("string",),
         "homepage": ("uri",),
     },
     "Channel": {
         "kind": ("string",),
-        "label": ("string",),
         "value": ("string", "uri"),
         "scope": ("string",),
     },
@@ -97,9 +98,8 @@ PROPERTY_TYPES: Final[dict[ClassType, dict[str, tuple[ValueType, ...]]]] = {
 # 목록 밖 값은 비슷한 값으로 추측해 바꾸지 않는다. 검증에서 해당 Fact만 제외한다.
 PROPERTY_VALUES: Final[dict[tuple[ClassType, str], frozenset[str]]] = {
     ("Person", "role"): frozenset({"Student", "Professor", "Professional"}),
-    ("Experience", "kind"): frozenset(
-        {"fulltime", "intern", "research", "exchange", "volunteer", "club", "program", "talk"}
-    ),
+    ("Experience", "kind"): frozenset({"fulltime", "contract", "intern", "research"}),
+    ("Activity", "kind"): frozenset({"club", "volunteer", "program", "talk"}),
     ("Work", "kind"): frozenset({"project", "publication", "opensource"}),
     ("Credential", "kind"): frozenset({"award", "certification"}),
     ("Organization", "type"): frozenset(
@@ -111,22 +111,31 @@ PROPERTY_VALUES: Final[dict[tuple[ClassType, str], frozenset[str]]] = {
 
 # (3) 한 Entity가 같은 predicate의 Fact를 여러 개 가질 수 있는 속성. 나머지는 값이 하나다.
 MULTI_VALUED_PROPERTIES: Final[frozenset[tuple[ClassType, str]]] = frozenset(
-    {("Education", "major"), ("Work", "url"), ("Person", "interests")}
+    {
+        ("Education", "major"),
+        ("Work", "url"),
+        ("Person", "interests"),
+        ("Skill", "category"),
+    }
 )
 
 # (4) Relation별 허용 (출발 Class, 도착 Class). 여러 쌍 중 하나를 만족하면 된다.
 RELATION_PAIRS: Final[dict[RelationType, frozenset[tuple[ClassType, ClassType]]]] = {
     "hasEducation": frozenset({("Person", "Education")}),
     "hasExperience": frozenset({("Person", "Experience")}),
-    "participatedIn": frozenset({("Person", "Work")}),
+    "participatedIn": frozenset({("Person", "Activity"), ("Person", "Work")}),
     "holds": frozenset({("Person", "Credential")}),
+    "hasSkill": frozenset({("Person", "Skill")}),
     "hasChannel": frozenset({("Person", "Channel")}),
     "atOrganization": frozenset(
-        {("Education", "Organization"), ("Experience", "Organization"), ("Work", "Organization")}
+        {
+            ("Education", "Organization"),
+            ("Experience", "Organization"),
+            ("Activity", "Organization"),
+            ("Work", "Organization"),
+        }
     ),
     "usesSkill": frozenset({("Work", "Skill"), ("Experience", "Skill")}),
     # 기간이 겹친다는 이유만으로 연결하지 않는다. 출처나 충분한 맥락 근거가 있어야 한다.
     "partOf": frozenset({("Work", "Experience")}),
-    # 분류 보조용 계층이다. 상위 Skill을 직접 사용했다는 사실로 저장하지 않는다.
-    "broader": frozenset({("Skill", "Skill")}),
 }

@@ -104,7 +104,7 @@ def build_initial_profile_seed(
     elif source.user_type == "professor":
         if _has_value(profile.university) or _has_value(profile.department):
             affiliation = add_entity("Experience")
-            add_fact(affiliation, "unit", profile.department)
+            add_fact(affiliation, "department", profile.department)
             add_relation(person, "hasExperience", affiliation)
         organization_name = profile.university
     else:
