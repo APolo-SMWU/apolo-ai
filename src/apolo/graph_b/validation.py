@@ -19,7 +19,7 @@ class ContentValidationIssue:
 _TIMELINE_ENTITY_TYPES = {
     "education": frozenset({"Education"}),
     "experience": frozenset({"Experience"}),
-    "activities": frozenset({"Experience"}),
+    "activities": frozenset({"Activity"}),
     "awards": frozenset({"Credential"}),
     "certification": frozenset({"Credential"}),
 }
