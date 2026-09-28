@@ -2,7 +2,14 @@
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_serializer,
+)
 
 from apolo.contracts.profile import SeedProfileInput
 
@@ -73,6 +80,41 @@ TimelineEndDate = Annotated[
     str, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)?$")
 ]
 
+EducationDate = Annotated[
+    str | None,
+    Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")
+]
+EducationEndDate = Annotated[
+    str | None,
+    Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
+]
+
+class EducationItem(_ResponseModel):
+    """Education 전용 항목. description·kind는 Education 계약에서 금지한다."""
+
+    entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
+    start_date: EducationDate = Field(alias="startDate")
+    end_date: EducationEndDate = Field(alias="endDate")
+    organization: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
+    role: ShortText | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_with_required_dates(self, nxt):
+        """exclude_none이어도 계약상 필수 nullable 날짜 키는 유지한다."""
+
+        value = nxt(self)
+        value["startDate"] = self.start_date
+        value["endDate"] = self.end_date
+        return value
+
+
+class EducationBlock(_ResponseModel):
+    type: Literal["education"] = "education"
+    visible: bool = True
+    items: list[EducationItem]
+
 
 class TimelineItem(_ResponseModel):
     entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
@@ -85,7 +127,7 @@ class TimelineItem(_ResponseModel):
 
 
 class TimelineBlock(_ResponseModel):
-    type: Literal["education", "experience", "activities", "awards", "certification"]
+    type: Literal["experience", "activities", "awards", "certification"]
     visible: bool = True
     items: list[TimelineItem]
 
@@ -134,7 +176,8 @@ class SkillsBlock(_ResponseModel):
 
 
 ContentBlock = Annotated[
-    AboutBlock | TimelineBlock | WorksBlock | SkillsBlock, Field(discriminator="type")
+    AboutBlock | EducationBlock | TimelineBlock | WorksBlock | SkillsBlock,
+    Field(discriminator="type"),
 ]
 
 
