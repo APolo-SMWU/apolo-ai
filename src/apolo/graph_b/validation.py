@@ -2,6 +2,7 @@
 
 from apolo.contracts.content import GraphBOutput
 from apolo.contracts.generate import (
+    AboutBlock,
     ActivitiesBlock,
     AwardsBlock,
     CertificationBlock,
@@ -59,6 +60,25 @@ def validate_graph_b_output(
     }
     issues: list[ContentValidationIssue] = []
     referenced_ids: set[str] = set()
+    about_indices = [
+        index for index, block in enumerate(output.blocks) if isinstance(block, AboutBlock)
+    ]
+    if not about_indices:
+        issues.append(
+            ContentValidationIssue(
+                path="blocks",
+                code="MISSING_ABOUT_BLOCK",
+                message="About 블록은 항상 하나 포함되어야 합니다.",
+            )
+        )
+    for block_index in about_indices[1:]:
+        issues.append(
+            ContentValidationIssue(
+                path=f"blocks[{block_index}]",
+                code="DUPLICATE_ABOUT_BLOCK",
+                message="About 블록은 하나만 포함할 수 있습니다.",
+            )
+        )
 
     for block_index, block in enumerate(output.blocks):
         block_path = f"blocks[{block_index}]"
