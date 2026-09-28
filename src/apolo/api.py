@@ -27,6 +27,7 @@ from apolo.graph_b.input import load_graph_b_input
 from apolo.graph_b.service import GraphBGenerationResult, generate_graph_b_content
 from apolo.llm.client import OpenAIExtractionClient
 from apolo.llm.config import load_langsmith_settings, load_llm_settings
+from apolo.ontology.personal import ONTOLOGY_VERSION
 from apolo.seed.persistence import ensure_profile_seed
 from apolo.source_collection import collect_and_store_public_sources
 
@@ -95,7 +96,7 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
                 return GenerateResponse(
                     blocks=[],
                     meta=GenerateMeta(
-                        ontology_schema_version="1.1", knowledge_graph_version=0
+                        ontology_schema_version=ONTOLOGY_VERSION, knowledge_graph_version=0
                     ),
                     warnings=[
                         GenerateWarning(
