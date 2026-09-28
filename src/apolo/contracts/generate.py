@@ -89,6 +89,7 @@ EducationEndDate = Annotated[
     Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
 ]
 
+
 class EducationItem(_ResponseModel):
     """Education 전용 항목. description·kind는 Education 계약에서 금지한다."""
 
@@ -116,6 +117,44 @@ class EducationBlock(_ResponseModel):
     items: list[EducationItem]
 
 
+ExperienceDate = Annotated[
+    str | None,
+    Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")
+]
+ExperienceEndDate = Annotated[
+    str | None,
+    Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
+]
+ExperienceItemKind = Literal["fulltime", "contract", "intern", "research"]
+
+
+class ExperienceItem(_ResponseModel):
+    """Experience 전용 항목. 근거가 없는 기관명은 null로 둔다."""
+
+    entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
+    start_date: ExperienceDate = Field(alias="startDate")
+    end_date: ExperienceEndDate = Field(alias="endDate")
+    organization: ShortText | None = None
+    role: ShortText | None = None
+    description: LongText | None = None
+    kind: ExperienceItemKind | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_with_required_dates(self, nxt):
+        """exclude_none이어도 계약상 필수 nullable 날짜 키는 유지한다."""
+
+        value = nxt(self)
+        value["startDate"] = self.start_date
+        value["endDate"] = self.end_date
+        return value
+
+
+class ExperienceBlock(_ResponseModel):
+    type: Literal["experience"] = "experience"
+    visible: bool = True
+    items: list[ExperienceItem]
+
+
 class TimelineItem(_ResponseModel):
     entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
     start_date: TimelineDate = Field(alias="startDate")
@@ -127,7 +166,7 @@ class TimelineItem(_ResponseModel):
 
 
 class TimelineBlock(_ResponseModel):
-    type: Literal["experience", "activities", "awards", "certification"]
+    type: Literal["activities", "awards", "certification"]
     visible: bool = True
     items: list[TimelineItem]
 
@@ -176,7 +215,7 @@ class SkillsBlock(_ResponseModel):
 
 
 ContentBlock = Annotated[
-    AboutBlock | EducationBlock | TimelineBlock | WorksBlock | SkillsBlock,
+    AboutBlock | EducationBlock | ExperienceBlock | TimelineBlock | WorksBlock | SkillsBlock,
     Field(discriminator="type"),
 ]
 

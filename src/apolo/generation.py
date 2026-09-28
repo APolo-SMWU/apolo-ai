@@ -10,10 +10,10 @@ from uuid import UUID
 from apolo.contracts.generate import (
     EducationBlock,
     EducationItem,
+    ExperienceBlock,
+    ExperienceItem,
     GenerateMeta,
     GenerateResponse,
-    TimelineBlock,
-    TimelineItem,
 )
 from apolo.contracts.kg import SeedKnowledgeGraph
 from apolo.graph_b.service import GraphBGenerationResult
@@ -39,7 +39,7 @@ def build_profile_only_response(seed: SeedKnowledgeGraph) -> GenerateResponse:
     person = next(entity for entity in seed.entities if entity.class_type == "Person")
 
     education: list[EducationItem] = []
-    experience: list[TimelineItem] = []
+    experience: list[ExperienceItem] = []
     seen: set[UUID] = set()
 
     for relation in seed.relations:
@@ -82,10 +82,11 @@ def build_profile_only_response(seed: SeedKnowledgeGraph) -> GenerateResponse:
                 role=role if role and role.strip() else None,
             )
         else:
-            item = TimelineItem(
+            item = ExperienceItem(
                 entity_id=str(entity_id),
-                start_date="",
-                organization=organization,
+                start_date=None,
+                end_date=None,
+                organization=organization.strip() or None,
                 role=role if role and role.strip() else None,
                 description=department if department and department.strip() else None,
             )
@@ -93,11 +94,11 @@ def build_profile_only_response(seed: SeedKnowledgeGraph) -> GenerateResponse:
 
     education.sort(key=_education_sort_key, reverse=True)
 
-    blocks: list[EducationBlock | TimelineBlock] = []
+    blocks: list[EducationBlock | ExperienceBlock] = []
     if education:
         blocks.append(EducationBlock(type="education", items=education))
     if experience:
-        blocks.append(TimelineBlock(type="experience", items=experience))
+        blocks.append(ExperienceBlock(type="experience", items=experience))
 
     return GenerateResponse(
         blocks=blocks,
