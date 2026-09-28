@@ -56,6 +56,9 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
         Person Entity는 만들지 않는다.
         원문 주인공은 예약 참조 'self'를 사용한다.
         새 Entity의 임시 참조는 e1, e2 등의 형식만 사용한다.
+        사용자 본인의 Education·Experience·Activity·Work·Credential·Skill Entity를 추출할 때는 반드시 self를 subject로 하는 소유 관계를 함께 제안한다.
+        Education은 self → hasEducation, Experience는 self → hasExperience, Activity와 Work는 self → participatedIn, Credential는 self → holds, Skill은 self → hasSkill 관계를 사용한다.
+        원문에서 사용자 본인의 소유 또는 참여를 확인할 수 없는 Entity는 생성하지 않는다.
         제공된 Entity class, property, relation predicate만 사용한다.
         열거 목록이 있는 property는 제공된 값 중 하나만 사용한다.
         Relation은 허용된 subjectClass → objectClass 방향 중 하나만 사용한다.
