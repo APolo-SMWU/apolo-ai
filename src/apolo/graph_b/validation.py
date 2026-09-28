@@ -31,6 +31,15 @@ _TIMELINE_ENTITY_TYPES = {
     "activities": frozenset({"Activity"}),
 }
 
+_BLOCK_RELATIONS = {
+    "education": frozenset({"hasEducation"}),
+    "experience": frozenset({"hasExperience"}),
+    "activities": frozenset({"participatedIn"}),
+    "works": frozenset({"participatedIn"}),
+    "awards": frozenset({"holds"}),
+    "certification": frozenset({"holds"}),
+}
+
 
 def validate_graph_b_output(
     output: GraphBOutput, graph: ActiveKnowledgeGraph
@@ -38,6 +47,16 @@ def validate_graph_b_output(
     """Graph B 블록의 Entity 참조·중복·빈 블록을 검증한다"""
 
     entity_types = {str(entity.id): entity.class_type for entity in graph.entities}
+    person_ids = {entity.id for entity in graph.entities if entity.class_type == "Person"}
+    connected_by_block = {
+        block_type: {
+            str(relation.object_entity_id)
+            for relation in graph.relations
+            if relation.subject_entity_id in person_ids
+            and relation.predicate in predicates
+        }
+        for block_type, predicates in _BLOCK_RELATIONS.items()
+    }
     issues: list[ContentValidationIssue] = []
     referenced_ids: set[str] = set()
 
@@ -45,17 +64,30 @@ def validate_graph_b_output(
         block_path = f"blocks[{block_index}]"
         if isinstance(block, (EducationBlock, ExperienceBlock, ActivitiesBlock)):
             _validate_timeline_block(
-                issues, referenced_ids, entity_types, block, block_path, graph
+                issues,
+                referenced_ids,
+                entity_types,
+                connected_by_block[block.type],
+                block,
+                block_path,
+                graph,
             )
         elif isinstance(block, WorksBlock):
             _validate_works_block(
-                issues, referenced_ids, entity_types, block, block_path, graph
+                issues,
+                referenced_ids,
+                entity_types,
+                connected_by_block[block.type],
+                block,
+                block_path,
+                graph,
             )
         elif isinstance(block, AwardsBlock):
             _validate_credential_block(
                 issues,
                 referenced_ids,
                 entity_types,
+                connected_by_block[block.type],
                 block,
                 block_path,
                 graph,
@@ -66,6 +98,7 @@ def validate_graph_b_output(
                 issues,
                 referenced_ids,
                 entity_types,
+                connected_by_block[block.type],
                 block,
                 block_path,
                 graph,
@@ -81,6 +114,7 @@ def _validate_timeline_block(
     issues: list[ContentValidationIssue],
     referenced_ids: set[str],
     entity_types: dict[str, str],
+    connected_entity_ids: set[str],
     block: EducationBlock | ExperienceBlock | ActivitiesBlock,
     block_path: str,
     graph: ActiveKnowledgeGraph,
@@ -106,6 +140,7 @@ def _validate_timeline_block(
             item.entity_id,
             _TIMELINE_ENTITY_TYPES[block.type],
             f"{item_path}.entityId",
+            connected_entity_ids=connected_entity_ids,
             allow_duplicate=isinstance(block, EducationBlock),
         )
         if isinstance(block, EducationBlock):
@@ -136,6 +171,7 @@ def _validate_works_block(
     issues: list[ContentValidationIssue],
     referenced_ids: set[str],
     entity_types: dict[str, str],
+    connected_entity_ids: set[str],
     block: WorksBlock,
     block_path: str,
     graph: ActiveKnowledgeGraph,
@@ -158,6 +194,7 @@ def _validate_works_block(
             item.entity_id,
             frozenset({"Work"}),
             f"{block_path}.items[{item_index}].entityId",
+            connected_entity_ids=connected_entity_ids,
         )
         validate_work_item(issues, item, graph, f"{block_path}.items[{item_index}]")
 
@@ -166,6 +203,7 @@ def _validate_credential_block(
     issues: list[ContentValidationIssue],
     referenced_ids: set[str],
     entity_types: dict[str, str],
+    connected_entity_ids: set[str],
     block: AwardsBlock | CertificationBlock,
     block_path: str,
     graph: ActiveKnowledgeGraph,
@@ -190,6 +228,7 @@ def _validate_credential_block(
             item.entity_id,
             frozenset({"Credential"}),
             f"{item_path}.entityId",
+            connected_entity_ids=connected_entity_ids,
         )
         item_validator(issues, item, graph, item_path)
 
@@ -202,6 +241,7 @@ def _validate_entity_reference(
     expected_types: frozenset[str],
     path: str,
     *,
+    connected_entity_ids: set[str] | None = None,
     allow_duplicate: bool = False,
 ) -> None:
     """출력 item의 Entity 존재·유형·중복 참조를 검증한다"""
@@ -221,6 +261,14 @@ def _validate_entity_reference(
                 path=path,
                 code="ENTITY_TYPE_MISMATCH",
                 message="블록 종류와 Entity 유형이 일치하지 않습니다.",
+            )
+        )
+    if connected_entity_ids is not None and entity_id not in connected_entity_ids:
+        issues.append(
+            ContentValidationIssue(
+                path=path,
+                code="ENTITY_NOT_CONNECTED",
+                message="콘텐츠가 Person 관계로 연결된 Entity가 아닙니다.",
             )
         )
     if entity_id in referenced_ids and not allow_duplicate:
