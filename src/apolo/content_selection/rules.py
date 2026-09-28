@@ -92,6 +92,7 @@ def _connected_entity_ids(
     while changed:
         changed = False
         for relation in graph.relations:
+            # Person에서 관계 방향을 따라 확장하고 Organization에서 콘텐츠로 역추적하지 않는다
             if (
                 relation.subject_entity_id in selected_ids
                 and relation.object_entity_id not in selected_ids
@@ -99,13 +100,5 @@ def _connected_entity_ids(
                 object_entity = entities_by_id.get(relation.object_entity_id)
                 if object_entity and object_entity.class_type in traversable_classes:
                     selected_ids.add(relation.object_entity_id)
-                    changed = True
-            if (
-                relation.object_entity_id in selected_ids
-                and relation.subject_entity_id not in selected_ids
-            ):
-                subject_entity = entities_by_id.get(relation.subject_entity_id)
-                if subject_entity and subject_entity.class_type in traversable_classes:
-                    selected_ids.add(relation.subject_entity_id)
                     changed = True
     return selected_ids
