@@ -193,6 +193,7 @@ class ActivitiesBlock(_ResponseModel):
     items: list[ActivityItem]
 
 
+# Legacy timeline contract retained for migration callers. New outputs use dedicated blocks
 class TimelineItem(_ResponseModel):
     entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
     start_date: TimelineDate = Field(alias="startDate")
@@ -207,6 +208,60 @@ class TimelineBlock(_ResponseModel):
     type: Literal["awards", "certification"]
     visible: bool = True
     items: list[TimelineItem]
+
+
+CredentialDate = Annotated[
+    str | None,
+    Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$"),
+]
+
+
+class AwardItem(_ResponseModel):
+    """Awards 전용 항목"""
+
+    entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
+    title: ShortText
+    issuer: ShortText | None = None
+    date: CredentialDate
+    description: LongText | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_with_required_date(self, nxt):
+        """exclude_none이어도 계약상 필수 nullable 날짜 키는 유지한다"""
+
+        value = nxt(self)
+        value["date"] = self.date
+        return value
+
+
+class AwardsBlock(_ResponseModel):
+    type: Literal["awards"] = "awards"
+    visible: bool = True
+    items: list[AwardItem]
+
+
+class CertificationItem(_ResponseModel):
+    """Certification 전용 항목"""
+
+    entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
+    title: ShortText
+    grade: ShortText | None = None
+    issuer: ShortText | None = None
+    date: CredentialDate
+
+    @model_serializer(mode="wrap")
+    def serialize_with_required_date(self, nxt):
+        """exclude_none이어도 계약상 필수 nullable 날짜 키는 유지한다"""
+
+        value = nxt(self)
+        value["date"] = self.date
+        return value
+
+
+class CertificationBlock(_ResponseModel):
+    type: Literal["certification"] = "certification"
+    visible: bool = True
+    items: list[CertificationItem]
 
 
 class WorkItem(_ResponseModel):
@@ -257,7 +312,8 @@ ContentBlock = Annotated[
     | EducationBlock
     | ExperienceBlock
     | ActivitiesBlock
-    | TimelineBlock
+    | AwardsBlock
+    | CertificationBlock
     | WorksBlock
     | SkillsBlock,
     Field(discriminator="type"),

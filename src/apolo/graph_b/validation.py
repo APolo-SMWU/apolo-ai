@@ -3,16 +3,19 @@
 from apolo.contracts.content import GraphBOutput
 from apolo.contracts.generate import (
     ActivitiesBlock,
+    AwardsBlock,
+    CertificationBlock,
     EducationBlock,
     ExperienceBlock,
     SkillsBlock,
-    TimelineBlock,
     WorksBlock,
 )
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
 from apolo.graph_b.validation_types import ContentValidationIssue
 from apolo.graph_b.validators import (
     validate_activity_item,
+    validate_award_item,
+    validate_certification_item,
     validate_education_item,
     validate_experience_item,
     validate_skill_block,
@@ -26,8 +29,6 @@ _TIMELINE_ENTITY_TYPES = {
     "education": frozenset({"Education"}),
     "experience": frozenset({"Experience"}),
     "activities": frozenset({"Activity"}),
-    "awards": frozenset({"Credential"}),
-    "certification": frozenset({"Credential"}),
 }
 
 
@@ -42,13 +43,33 @@ def validate_graph_b_output(
 
     for block_index, block in enumerate(output.blocks):
         block_path = f"blocks[{block_index}]"
-        if isinstance(block, (EducationBlock, ExperienceBlock, ActivitiesBlock, TimelineBlock)):
+        if isinstance(block, (EducationBlock, ExperienceBlock, ActivitiesBlock)):
             _validate_timeline_block(
                 issues, referenced_ids, entity_types, block, block_path, graph
             )
         elif isinstance(block, WorksBlock):
             _validate_works_block(
                 issues, referenced_ids, entity_types, block, block_path, graph
+            )
+        elif isinstance(block, AwardsBlock):
+            _validate_credential_block(
+                issues,
+                referenced_ids,
+                entity_types,
+                block,
+                block_path,
+                graph,
+                validate_award_item,
+            )
+        elif isinstance(block, CertificationBlock):
+            _validate_credential_block(
+                issues,
+                referenced_ids,
+                entity_types,
+                block,
+                block_path,
+                graph,
+                validate_certification_item,
             )
         elif isinstance(block, SkillsBlock):
             validate_skill_block(issues, block, block_path)
@@ -60,7 +81,7 @@ def _validate_timeline_block(
     issues: list[ContentValidationIssue],
     referenced_ids: set[str],
     entity_types: dict[str, str],
-    block: EducationBlock | ExperienceBlock | ActivitiesBlock | TimelineBlock,
+    block: EducationBlock | ExperienceBlock | ActivitiesBlock,
     block_path: str,
     graph: ActiveKnowledgeGraph,
 ) -> None:
@@ -139,6 +160,38 @@ def _validate_works_block(
             f"{block_path}.items[{item_index}].entityId",
         )
         validate_work_item(issues, item, graph, f"{block_path}.items[{item_index}]")
+
+
+def _validate_credential_block(
+    issues: list[ContentValidationIssue],
+    referenced_ids: set[str],
+    entity_types: dict[str, str],
+    block: AwardsBlock | CertificationBlock,
+    block_path: str,
+    graph: ActiveKnowledgeGraph,
+    item_validator,
+) -> None:
+    """Credential block의 공통 참조와 전용 필드 검증을 수행한다"""
+
+    if not block.items:
+        issues.append(
+            ContentValidationIssue(
+                path=block_path,
+                code="EMPTY_BLOCK",
+                message="콘텐츠 블록에는 항목이 하나 이상 있어야 합니다.",
+            )
+        )
+    for item_index, item in enumerate(block.items):
+        item_path = f"{block_path}.items[{item_index}]"
+        _validate_entity_reference(
+            issues,
+            referenced_ids,
+            entity_types,
+            item.entity_id,
+            frozenset({"Credential"}),
+            f"{item_path}.entityId",
+        )
+        item_validator(issues, item, graph, item_path)
 
 
 def _validate_entity_reference(
