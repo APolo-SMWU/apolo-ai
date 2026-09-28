@@ -216,6 +216,10 @@ def _run_graph_b(
         ]
 
     if not result.is_valid:
+        issue_summary = ", ".join(
+            f"{issue.code}@{issue.path}" for issue in result.issues
+        )
+        logger.warning("Graph B 출력 검증 실패: %s", issue_summary)
         return None, [
             GenerateWarning(
                 code="GRAPH_B_OUTPUT_INVALID",
