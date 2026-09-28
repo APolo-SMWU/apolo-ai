@@ -12,6 +12,7 @@ _CONTENT_CLASSES: frozenset[ClassType] = frozenset(
     {"Education", "Experience", "Activity", "Work", "Credential", "Skill"}
 )
 _CONTEXT_CLASSES: frozenset[ClassType] = frozenset({"Organization", "Channel", "Skill"})
+_SKILL_BRIDGE_CLASSES: frozenset[ClassType] = frozenset({"Work", "Experience"})
 _REQUIREMENT_CLASS_TERMS: dict[ClassType, tuple[str, ...]] = {
     "Work": ("프로젝트", "작업", "project", "work"),
     "Skill": ("기술", "스킬", "기술스택", "skill", "stack"),
@@ -61,10 +62,11 @@ def select_relevant_knowledge(
     selected_graph = graph.model_copy(
         update={"entities": entities, "facts": facts, "relations": relations}
     )
+    output_classes = requested_classes or _CONTENT_CLASSES
     return ContentSelection(
         graph=selected_graph,
         selected_classes=frozenset(
-            entity.class_type for entity in entities if entity.class_type in _CONTENT_CLASSES
+            entity.class_type for entity in entities if entity.class_type in output_classes
         ),
     )
 
@@ -84,6 +86,8 @@ def _connected_entity_ids(
     entities_by_id = {entity.id: entity for entity in graph.entities}
     selected_ids = {entity.id for entity in graph.entities if entity.class_type == "Person"}
 
+    bridge_classes = _SKILL_BRIDGE_CLASSES if "Skill" in selected_content_classes else frozenset()
+    traversable_classes = _CONTEXT_CLASSES | selected_content_classes | bridge_classes
     changed = True
     while changed:
         changed = False
@@ -93,9 +97,7 @@ def _connected_entity_ids(
                 and relation.object_entity_id not in selected_ids
             ):
                 object_entity = entities_by_id.get(relation.object_entity_id)
-                if object_entity and object_entity.class_type in (
-                    _CONTEXT_CLASSES | selected_content_classes
-                ):
+                if object_entity and object_entity.class_type in traversable_classes:
                     selected_ids.add(relation.object_entity_id)
                     changed = True
             if (
@@ -103,9 +105,7 @@ def _connected_entity_ids(
                 and relation.subject_entity_id not in selected_ids
             ):
                 subject_entity = entities_by_id.get(relation.subject_entity_id)
-                if subject_entity and subject_entity.class_type in (
-                    _CONTEXT_CLASSES | selected_content_classes
-                ):
+                if subject_entity and subject_entity.class_type in traversable_classes:
                     selected_ids.add(relation.subject_entity_id)
                     changed = True
     return selected_ids

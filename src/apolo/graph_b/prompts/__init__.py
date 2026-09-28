@@ -5,6 +5,7 @@ from apolo.graph_b.prompts.common import COMMON_PROMPT
 from apolo.graph_b.prompts.credentials import CREDENTIALS_PROMPT
 from apolo.graph_b.prompts.education import EDUCATION_PROMPT
 from apolo.graph_b.prompts.experience import EXPERIENCE_PROMPT
+from apolo.graph_b.prompts.skills import SKILLS_PROMPT
 from apolo.graph_b.prompts.works import WORKS_PROMPT
 
 BLOCK_PROMPTS: dict[str, str] = {
@@ -13,6 +14,7 @@ BLOCK_PROMPTS: dict[str, str] = {
     "Experience": EXPERIENCE_PROMPT,
     "Work": WORKS_PROMPT,
     "Credential": CREDENTIALS_PROMPT,
+    "Skill": SKILLS_PROMPT,
 }
 
 __all__ = ["BLOCK_PROMPTS", "COMMON_PROMPT"]

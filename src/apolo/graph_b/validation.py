@@ -18,7 +18,7 @@ from apolo.graph_b.validators import (
     validate_certification_item,
     validate_education_item,
     validate_experience_item,
-    validate_skill_block,
+    validate_skill_content,
     validate_work_item,
 )
 
@@ -72,7 +72,7 @@ def validate_graph_b_output(
                 validate_certification_item,
             )
         elif isinstance(block, SkillsBlock):
-            validate_skill_block(issues, block, block_path)
+            validate_skill_content(issues, block, graph, block_path)
 
     return issues
 

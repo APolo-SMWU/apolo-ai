@@ -7,6 +7,7 @@ from apolo.graph_b.validators.credentials import (
 )
 from apolo.graph_b.validators.education import validate_education_item
 from apolo.graph_b.validators.experience import validate_experience_item
+from apolo.graph_b.validators.skill_content import validate_skill_content
 from apolo.graph_b.validators.skills import validate_skill_block
 from apolo.graph_b.validators.works import validate_work_item
 
@@ -17,5 +18,6 @@ __all__ = [
     "validate_education_item",
     "validate_experience_item",
     "validate_skill_block",
+    "validate_skill_content",
     "validate_work_item",
 ]
