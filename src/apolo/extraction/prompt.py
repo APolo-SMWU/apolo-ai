@@ -9,6 +9,7 @@ from apolo.contracts.extraction import (
     StructuredExtractionResult,
 )
 from apolo.contracts.source import CollectedSource
+from apolo.ontology.personal import RELATION_PAIRS
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,14 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
         for class_type, properties in EXTRACTABLE_PROPERTIES.items()
     }
     allowed_relations = sorted(EXTRACTABLE_RELATIONS)
+    allowed_relation_pairs = {
+        predicate: [
+            {"subjectClass": subject, "objectClass": object_}
+            for subject, object_ in sorted(pairs)
+        ]
+        for predicate, pairs in sorted(RELATION_PAIRS.items())
+        if predicate in EXTRACTABLE_RELATIONS
+    }
     evidence_candidates = [candidate.model_dump() for candidate in source.evidence_candidates]
 
     system = "\n".join(
@@ -37,6 +46,7 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
             "Person Entity는 만들지 않는다. 원문 주인공은 예약 참조 'self'를 사용한다.",
             "새 Entity의 임시 참조는 e1, e2 등의 형식만 사용한다.",
             "제공된 Entity class, property, relation predicate만 사용한다.",
+            "Relation은 허용된 subjectClass → objectClass 방향 중 하나만 사용한다.",
             "모든 Fact와 Relation은 근거 후보에 있는 정확한 비어 있지 않은 원문 인용을 사용한다.",
             "원문이 후보를 뒷받침하지 않으면 그 후보를 생략한다.",
         ]
@@ -46,6 +56,8 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
             "Entity class별 허용 property:\n"
             + json.dumps(allowed_properties, ensure_ascii=False, sort_keys=True),
             "허용 relation predicate:\n" + json.dumps(allowed_relations, ensure_ascii=False),
+            "허용 relation 방향(subjectClass → objectClass):\n"
+            + json.dumps(allowed_relation_pairs, ensure_ascii=False, sort_keys=True),
             "ExtractionResult JSON Schema:\n"
             + json.dumps(
                 StructuredExtractionResult.model_json_schema(),
