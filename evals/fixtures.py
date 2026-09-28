@@ -5,6 +5,7 @@ from uuid import UUID
 
 from apolo.contracts.knowledge import (
     ActiveKnowledgeEntity,
+    ActiveKnowledgeFact,
     ActiveKnowledgeGraph,
     ActiveKnowledgeRelation,
 )
@@ -63,6 +64,28 @@ def build_synthetic_graph() -> ActiveKnowledgeGraph:
             updated_at=NOW,
         ),
     ]
+    facts = [
+        ActiveKnowledgeFact(
+            id=UUID("00000000-0000-0000-0000-000000000021"),
+            entity_id=WORK_ID,
+            predicate="title",
+            value="APolo",
+            value_type="string",
+            origin="user",
+            provenance="profile",
+            updated_at=NOW,
+        ),
+        ActiveKnowledgeFact(
+            id=UUID("00000000-0000-0000-0000-000000000022"),
+            entity_id=WORK_ID,
+            predicate="kind",
+            value="project",
+            value_type="string",
+            origin="user",
+            provenance="profile",
+            updated_at=NOW,
+        ),
+    ]
     return ActiveKnowledgeGraph(
         id=GRAPH_ID,
         user_id=1,
@@ -71,5 +94,6 @@ def build_synthetic_graph() -> ActiveKnowledgeGraph:
         created_at=NOW,
         updated_at=NOW,
         entities=entities,
+        facts=facts,
         relations=relations,
     )

@@ -210,14 +210,14 @@ class TimelineBlock(_ResponseModel):
 
 
 class WorkItem(_ResponseModel):
-    """links에는 Source에서 확인된 URL만 넣는다. AI가 URL을 만들어내지 않는다"""
+    """Works 전용 항목. links에는 Source에서 확인된 URL만 넣는다"""
 
     entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
     kind: Literal["project", "publication", "opensource"]
     title: ShortText
     role: ShortText | None = None
     skills: list[SkillText] | None = None
-    description: LongText
+    description: LongText | None = None
     image_url: str | None = Field(default=None, alias="imageUrl")
     links: list[ProjectLink] = Field(default_factory=list)
 

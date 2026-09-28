@@ -16,6 +16,7 @@ from apolo.graph_b.validators import (
     validate_education_item,
     validate_experience_item,
     validate_skill_block,
+    validate_work_item,
 )
 
 __all__ = ["ContentValidationIssue", "validate_graph_b_output"]
@@ -46,7 +47,9 @@ def validate_graph_b_output(
                 issues, referenced_ids, entity_types, block, block_path, graph
             )
         elif isinstance(block, WorksBlock):
-            _validate_works_block(issues, referenced_ids, entity_types, block, block_path)
+            _validate_works_block(
+                issues, referenced_ids, entity_types, block, block_path, graph
+            )
         elif isinstance(block, SkillsBlock):
             validate_skill_block(issues, block, block_path)
 
@@ -114,6 +117,7 @@ def _validate_works_block(
     entity_types: dict[str, str],
     block: WorksBlock,
     block_path: str,
+    graph: ActiveKnowledgeGraph,
 ) -> None:
     """Works block의 공통 Entity 참조를 검증한다"""
 
@@ -134,6 +138,7 @@ def _validate_works_block(
             frozenset({"Work"}),
             f"{block_path}.items[{item_index}].entityId",
         )
+        validate_work_item(issues, item, graph, f"{block_path}.items[{item_index}]")
 
 
 def _validate_entity_reference(
