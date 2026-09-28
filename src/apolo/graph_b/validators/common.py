@@ -75,3 +75,20 @@ def format_output_date(value: str) -> str:
         return value
     year, month = match.groups()
     return f"{year}.{month}" if month else year
+
+
+def has_inverted_period(start: str | None, end: str | None) -> bool:
+    """확인된 시작일이 종료일보다 뒤인지 확인한다"""
+
+    if not start or not end or end == "Present":
+        return False
+    start_year, start_month = _period_key(start, default_month=1)
+    end_year, end_month = _period_key(end, default_month=12)
+    return (start_year, start_month) > (end_year, end_month)
+
+
+def _period_key(value: str, *, default_month: int) -> tuple[int, int]:
+    """YYYY·YYYY.MM 문자열을 비교용 연·월로 변환한다"""
+
+    year, _, month = value.partition(".")
+    return int(year), int(month) if month else default_month

@@ -8,6 +8,7 @@ from apolo.graph_b.validators.common import (
     entity_facts,
     fact_values,
     has_current_fact,
+    has_inverted_period,
     item_entity_id,
     organization_names,
 )
@@ -70,6 +71,15 @@ def validate_experience_item(
                 path=f"{item_path}.endDate",
                 code="EXPERIENCE_END_DATE_UNSUPPORTED",
                 message="Experience endDate가 KG의 기간 근거와 일치하지 않습니다.",
+            )
+        )
+
+    if has_inverted_period(item.start_date, item.end_date):
+        issues.append(
+            ContentValidationIssue(
+                path=item_path,
+                code="EXPERIENCE_DATE_RANGE_INVALID",
+                message="Experience startDate가 endDate보다 늦을 수 없습니다.",
             )
         )
 

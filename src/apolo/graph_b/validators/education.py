@@ -7,6 +7,7 @@ from apolo.graph_b.validators.common import (
     date_values,
     entity_facts,
     has_current_fact,
+    has_inverted_period,
     item_entity_id,
     organization_names,
 )
@@ -68,5 +69,14 @@ def validate_education_item(
                 path=f"{item_path}.endDate",
                 code="EDUCATION_END_DATE_UNSUPPORTED",
                 message="Education endDate가 KG의 기간 근거와 일치하지 않습니다.",
+            )
+        )
+
+    if has_inverted_period(item.start_date, item.end_date):
+        issues.append(
+            ContentValidationIssue(
+                path=item_path,
+                code="EDUCATION_DATE_RANGE_INVALID",
+                message="Education startDate가 endDate보다 늦을 수 없습니다.",
             )
         )
