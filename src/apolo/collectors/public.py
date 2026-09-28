@@ -43,7 +43,11 @@ async def collect_public_sources(
         try:
             if hostname in {"github.com", "www.github.com"}:
                 result = await collect_github_sources(
-                    source_url, client=client, select_files=True
+                    source_url,
+                    client=client,
+                    # 프로필은 여러 Repository를 확장하므로 대용량 Tree·Blob 조회를
+                    # 생략하고 각 Repository의 메타데이터와 README만 수집
+                    select_files=_is_github_repository_url(source_url),
                 )
             elif hostname in {
                 "notion.so",
@@ -78,3 +82,12 @@ async def collect_public_sources(
         )
 
     return PublicCollectionResult(sources=sources, warnings=warnings)
+
+
+def _is_github_repository_url(source_url: str) -> bool:
+    """GitHub 프로필 URL과 Repository URL을 구분한다."""
+    try:
+        path_parts = [part for part in urlparse(source_url).path.split("/") if part]
+    except ValueError:
+        return False
+    return len(path_parts) == 2
