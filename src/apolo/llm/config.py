@@ -1,11 +1,13 @@
 """Graph A LLM·LangSmith 실행 환경 설정"""
 
+import math
 import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
 DEFAULT_EXTRACTION_MODEL = "gpt-5.6-luna"
+DEFAULT_EXTRACTION_TIMEOUT_SECONDS = 60.0
 DEFAULT_LANGSMITH_PROJECT = "apolo-ai"
 
 
@@ -15,6 +17,7 @@ class LlmSettings:
 
     api_key: str | None
     extraction_model: str
+    extraction_timeout_seconds: float = DEFAULT_EXTRACTION_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,9 @@ def load_llm_settings() -> LlmSettings:
     return LlmSettings(
         api_key=_optional_env("OPENAI_API_KEY"),
         extraction_model=os.getenv("APOLO_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
+        extraction_timeout_seconds=_positive_float_env(
+            "APOLO_EXTRACTION_TIMEOUT_SECONDS", DEFAULT_EXTRACTION_TIMEOUT_SECONDS
+        ),
     )
 
 
@@ -49,3 +55,15 @@ def _optional_env(name: str) -> str | None:
     """빈 환경 변수는 미설정으로 처리"""
     value = os.getenv(name, "").strip()
     return value or None
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    """양수인 실수 환경 변수를 읽고 잘못된 값은 기본값으로 대체"""
+    value = _optional_env(name)
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if math.isfinite(parsed) and parsed > 0 else default
