@@ -203,7 +203,10 @@ def _same_entity(candidate: ExistingEntity, stored: ExistingEntity) -> bool:
         return (
             bool(candidate.organization_ids & stored.organization_ids)
             and _shared(candidate, stored, "role")
-            and all(_compatible(candidate, stored, field) for field in ("unit", "kind", "start"))
+            and all(
+                _compatible(candidate, stored, field)
+                for field in ("department", "kind", "start")
+            )
         )
     return False
 

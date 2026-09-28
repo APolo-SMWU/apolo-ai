@@ -13,21 +13,30 @@ from apolo.ontology.personal import RelationType
 # 사용자 본인 Person을 가리키는 예약 참조. Person은 추출로 만들지 않는다.
 SELF_REF: Final = "self"
 
-ExtractableClass = Literal["Work", "Skill", "Experience", "Education", "Credential", "Organization"]
+ExtractableClass = Literal[
+    "Work", "Skill", "Experience", "Activity", "Education", "Credential", "Organization"
+]
 
 # MVP 추출 범위. 온톨로지에 있어도 여기 없는 속성·Relation은 제외한다.
 EXTRACTABLE_PROPERTIES: Final[dict[ExtractableClass, frozenset[str]]] = {
-    "Work": frozenset({"title", "kind", "role", "start", "end", "sourceDescription", "url"}),
+    "Work": frozenset({"title", "kind", "role", "start", "end", "url"}),
     "Skill": frozenset({"name", "category"}),
-    "Experience": frozenset(
-        {"role", "unit", "kind", "start", "end", "isCurrent", "sourceDescription"}
-    ),
-    "Education": frozenset({"major", "degree", "start", "end", "expectedEnd", "isCurrent"}),
+    "Experience": frozenset({"role", "department", "kind", "start", "end", "isCurrent"}),
+    "Activity": frozenset({"name", "role", "kind", "start", "end", "isCurrent"}),
+    "Education": frozenset({"major", "degree", "start", "end", "isCurrent"}),
     "Credential": frozenset({"title", "kind", "issuerName", "date", "grade"}),
     "Organization": frozenset({"name", "type", "homepage"}),
 }
 EXTRACTABLE_RELATIONS: Final[frozenset[RelationType]] = frozenset(
-    {"hasEducation", "hasExperience", "participatedIn", "holds", "atOrganization", "usesSkill"}
+    {
+        "hasEducation",
+        "hasExperience",
+        "participatedIn",
+        "holds",
+        "atOrganization",
+        "usesSkill",
+        "partOf",
+    }
 )
 
 

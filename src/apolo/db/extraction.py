@@ -15,7 +15,7 @@ from apolo.ontology.personal import MULTI_VALUED_PROPERTIES, PROPERTY_TYPES
 
 # 같은 출발 Entity에서 여러 대상이 자연스러운 Relation이다.
 _MULTI_TARGET_RELATIONS = frozenset(
-    {"hasEducation", "hasExperience", "holds", "participatedIn", "usesSkill", "broader"}
+    {"hasEducation", "hasExperience", "holds", "participatedIn", "usesSkill"}
 )
 
 

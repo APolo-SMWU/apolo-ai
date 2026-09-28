@@ -63,16 +63,16 @@ def build_profile_only_response(seed: SeedKnowledgeGraph) -> GenerateResponse:
 
         is_education = relation.predicate == "hasEducation"
         role = facts.get((entity_id, "major" if is_education else "role"))
-        # 교수의 학과(unit)는 직함(role)으로 바꾸지 않고
+        # 교수의 학과(department)는 직함(role)으로 바꾸지 않고
         # 부가정보(description)에 표시한다.
-        unit = facts.get((entity_id, "unit")) if not is_education else None
+        department = facts.get((entity_id, "department")) if not is_education else None
 
         item = TimelineItem(
             entity_id=str(entity_id),
             start_date="",
             organization=organization,
             role=role if role and role.strip() else None,
-            description=unit if unit and unit.strip() else None,
+            description=department if department and department.strip() else None,
         )
         (education if is_education else experience).append(item)
 

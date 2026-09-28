@@ -37,10 +37,11 @@ _IDENTITY_PREDICATES = {
     "Skill": "name",
     "Organization": "name",
     "Experience": "role",
+    "Activity": "name",
     "Education": "major",
 }
 # 이 Class는 이름 있는 소속 기관 Relation이 있으면 역할·전공이 없어도 인정한다.
-_IDENTIFIED_BY_ORGANIZATION = frozenset({"Experience", "Education"})
+_IDENTIFIED_BY_ORGANIZATION = frozenset({"Experience", "Activity", "Education"})
 
 
 @dataclass(frozen=True)
