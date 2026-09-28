@@ -96,12 +96,13 @@ def resolve_existing_entities(
     resolved_ids: dict[str, UUID] = {}
     stored_ids = {entity.id for entity in existing}
     pool = list(existing)
-    # 학력·경력은 소속 기관의 ID가 정해진 뒤에 비교한다.
+    # 학력·경력·활동은 소속 기관의 ID가 정해진 뒤에 비교한다.
     order = {
         "Organization": 0,
         "Work": 1,
         "Skill": 1,
         "Credential": 1,
+        "Activity": 2,
         "Education": 2,
         "Experience": 2,
     }
@@ -113,7 +114,7 @@ def resolve_existing_entities(
             facts=facts[ref],
             strong_keys=frozenset(strong_keys[ref]),
         )
-        if entity.class_type in {"Education", "Experience"}:
+        if entity.class_type in {"Activity", "Education", "Experience"}:
             org_refs = affiliations[ref]
             if any(org in ambiguous for org in org_refs):
                 ambiguous.append(ref)
@@ -129,7 +130,7 @@ def resolve_existing_entities(
                     resolved_ids[org] for org in org_refs if org in resolved_ids
                 ),
             )
-            if not org_refs:
+            if entity.class_type in {"Education", "Experience"} and not org_refs:
                 entity_id = uuid4()
                 resolved_ids[ref] = entity_id
                 new_ids[ref] = entity_id
@@ -208,6 +209,20 @@ def _same_entity(candidate: ExistingEntity, stored: ExistingEntity) -> bool:
                 for field in ("department", "kind", "start")
             )
         )
+    if kind == "Activity":
+        organizations_compatible = (
+            not candidate.organization_ids
+            or not stored.organization_ids
+            or bool(candidate.organization_ids & stored.organization_ids)
+        )
+        return (
+            _shared(candidate, stored, "name")
+            and organizations_compatible
+            and all(
+                _compatible(candidate, stored, field)
+                for field in ("role", "kind", "start", "end", "isCurrent")
+            )
+        )
     return False
 
 
@@ -222,7 +237,7 @@ def _compatible(left: ExistingEntity, right: ExistingEntity, predicate: str) -> 
     right_values = {_normalized(value) for value in right.facts.get(predicate, ())}
     if not left_values or not right_values:
         return True
-    if predicate in {"start", "date"}:
+    if predicate in {"start", "end", "date"}:
         return any(
             isinstance(a, str)
             and isinstance(b, str)

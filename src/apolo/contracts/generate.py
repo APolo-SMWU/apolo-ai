@@ -155,6 +155,44 @@ class ExperienceBlock(_ResponseModel):
     items: list[ExperienceItem]
 
 
+ActivityDate = Annotated[
+    str | None,
+    Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$"),
+]
+ActivityEndDate = Annotated[
+    str | None,
+    Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$"),
+]
+ActivityItemKind = Literal["club", "volunteer", "program", "talk"]
+
+
+class ActivityItem(_ResponseModel):
+    """Activities 전용 항목. 활동명 또는 기관명이 표시용 organization이 된다."""
+
+    entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
+    start_date: ActivityDate = Field(alias="startDate")
+    end_date: ActivityEndDate = Field(alias="endDate")
+    organization: ShortText
+    role: ShortText | None = None
+    description: LongText | None = None
+    kind: ActivityItemKind | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_with_required_dates(self, nxt):
+        """exclude_none이어도 계약상 필수 nullable 날짜 키는 유지한다."""
+
+        value = nxt(self)
+        value["startDate"] = self.start_date
+        value["endDate"] = self.end_date
+        return value
+
+
+class ActivitiesBlock(_ResponseModel):
+    type: Literal["activities"] = "activities"
+    visible: bool = True
+    items: list[ActivityItem]
+
+
 class TimelineItem(_ResponseModel):
     entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
     start_date: TimelineDate = Field(alias="startDate")
@@ -166,7 +204,7 @@ class TimelineItem(_ResponseModel):
 
 
 class TimelineBlock(_ResponseModel):
-    type: Literal["activities", "awards", "certification"]
+    type: Literal["awards", "certification"]
     visible: bool = True
     items: list[TimelineItem]
 
@@ -215,7 +253,13 @@ class SkillsBlock(_ResponseModel):
 
 
 ContentBlock = Annotated[
-    AboutBlock | EducationBlock | ExperienceBlock | TimelineBlock | WorksBlock | SkillsBlock,
+    AboutBlock
+    | EducationBlock
+    | ExperienceBlock
+    | ActivitiesBlock
+    | TimelineBlock
+    | WorksBlock
+    | SkillsBlock,
     Field(discriminator="type"),
 ]
 

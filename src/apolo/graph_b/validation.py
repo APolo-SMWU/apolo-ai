@@ -6,6 +6,8 @@ from uuid import UUID
 
 from apolo.contracts.content import GraphBOutput
 from apolo.contracts.generate import (
+    ActivitiesBlock,
+    ActivityItem,
     EducationBlock,
     EducationItem,
     ExperienceBlock,
@@ -45,7 +47,7 @@ def validate_graph_b_output(
 
     for block_index, block in enumerate(output.blocks):
         block_path = f"blocks[{block_index}]"
-        if isinstance(block, (EducationBlock, ExperienceBlock, TimelineBlock)):
+        if isinstance(block, (EducationBlock, ExperienceBlock, ActivitiesBlock, TimelineBlock)):
             expected_type = _TIMELINE_ENTITY_TYPES[block.type]
             if not block.items:
                 issues.append(
@@ -87,6 +89,8 @@ def validate_graph_b_output(
                     _validate_education_item(issues, item, graph, item_path)
                 elif isinstance(block, ExperienceBlock):
                     _validate_experience_item(issues, item, graph, item_path)
+                elif isinstance(block, ActivitiesBlock):
+                    _validate_activity_item(issues, item, graph, item_path)
         elif isinstance(block, WorksBlock):
             if not block.items:
                 issues.append(
@@ -348,6 +352,118 @@ def _validate_experience_item(
                     path=f"{item_path}.kind",
                     code="EXPERIENCE_KIND_UNSUPPORTED",
                     message="Experience kind가 KG의 근거와 일치하지 않습니다.",
+                )
+            )
+
+
+def _validate_activity_item(
+    issues: list[ContentValidationIssue],
+    item: ActivityItem,
+    graph: ActiveKnowledgeGraph,
+    item_path: str,
+) -> None:
+    """Activities 값이 연결된 Activity KG 근거와 일치하는지 검증한다."""
+
+    try:
+        entity_id = UUID(item.entity_id)
+    except ValueError:
+        return  # Entity 참조 오류는 공통 검증이 이미 보고한다.
+
+    facts = [fact for fact in graph.facts if fact.entity_id == entity_id]
+    relations = [
+        relation
+        for relation in graph.relations
+        if relation.subject_entity_id == entity_id and relation.predicate == "atOrganization"
+    ]
+    organization_ids = {relation.object_entity_id for relation in relations}
+    organization_names = {
+        fact.value
+        for fact in graph.facts
+        if fact.entity_id in organization_ids and fact.predicate == "name"
+    }
+    activity_names = {
+        fact.value for fact in facts if fact.predicate == "name" and isinstance(fact.value, str)
+    }
+    accepted_organization_values = organization_names or activity_names
+
+    if not accepted_organization_values:
+        issues.append(
+            ContentValidationIssue(
+                path=f"{item_path}.organization",
+                code="ACTIVITY_ORGANIZATION_NOT_FOUND",
+                message="Activities organization의 KG 근거가 없습니다.",
+            )
+        )
+    elif item.organization not in accepted_organization_values:
+        issues.append(
+            ContentValidationIssue(
+                path=f"{item_path}.organization",
+                code="ACTIVITY_ORGANIZATION_MISMATCH",
+                message="Activities organization이 KG의 기관명 또는 활동명과 일치하지 않습니다.",
+            )
+        )
+
+    date_values = {
+        predicate: {
+            _format_output_date(fact.value)
+            for fact in facts
+            if fact.predicate == predicate and isinstance(fact.value, str)
+        }
+        for predicate in ("start", "end")
+    }
+    if item.start_date is not None and item.start_date not in date_values["start"]:
+        issues.append(
+            ContentValidationIssue(
+                path=f"{item_path}.startDate",
+                code="ACTIVITY_START_DATE_UNSUPPORTED",
+                message="Activities startDate가 KG의 기간 근거와 일치하지 않습니다.",
+            )
+        )
+
+    if item.end_date == "Present":
+        is_current = any(
+            fact.predicate == "isCurrent" and fact.value is True for fact in facts
+        )
+        if not is_current:
+            issues.append(
+                ContentValidationIssue(
+                    path=f"{item_path}.endDate",
+                    code="ACTIVITY_PRESENT_WITHOUT_CURRENT",
+                    message="현재 활동 근거가 없으면 endDate에 Present를 사용할 수 없습니다.",
+                )
+            )
+    elif item.end_date is not None and item.end_date not in date_values["end"]:
+        issues.append(
+            ContentValidationIssue(
+                path=f"{item_path}.endDate",
+                code="ACTIVITY_END_DATE_UNSUPPORTED",
+                message="Activities endDate가 KG의 기간 근거와 일치하지 않습니다.",
+            )
+        )
+
+    if item.role is not None:
+        role_values = {
+            fact.value for fact in facts if fact.predicate == "role" and isinstance(fact.value, str)
+        }
+        if item.role not in role_values:
+            issues.append(
+                ContentValidationIssue(
+                    path=f"{item_path}.role",
+                    code="ACTIVITY_ROLE_UNSUPPORTED",
+                    message="Activities role이 KG의 근거와 일치하지 않습니다.",
+                )
+            )
+
+    if item.kind is not None:
+        kind_values = {
+            fact.value for fact in facts if fact.predicate == "kind" and isinstance(fact.value, str)
+        }
+        if item.kind not in kind_values:
+            issues.append(
+                ContentValidationIssue(
+                    path=f"{item_path}.kind",
+                    code="ACTIVITY_KIND_UNSUPPORTED",
+                    message="Activities kind가 KG의 근거와 일치하지 않습니다.",
                 )
             )
 

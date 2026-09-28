@@ -9,13 +9,23 @@ from apolo.contracts.knowledge import ActiveKnowledgeGraph
 from apolo.ontology.personal import ClassType
 
 _CONTENT_CLASSES: frozenset[ClassType] = frozenset(
-    {"Education", "Experience", "Work", "Credential", "Skill"}
+    {"Education", "Experience", "Activity", "Work", "Credential", "Skill"}
 )
 _CONTEXT_CLASSES: frozenset[ClassType] = frozenset({"Organization", "Channel", "Skill"})
 _REQUIREMENT_CLASS_TERMS: dict[ClassType, tuple[str, ...]] = {
     "Work": ("프로젝트", "작업", "project", "work"),
     "Skill": ("기술", "스킬", "기술스택", "skill", "stack"),
     "Experience": ("경력", "경험", "career", "experience"),
+    "Activity": (
+        "활동",
+        "대외활동",
+        "동아리",
+        "봉사",
+        "프로그램",
+        "발표",
+        "activity",
+        "activities",
+    ),
     "Education": ("학력", "교육", "전공", "education"),
     "Credential": ("수상", "자격", "credential", "award", "certification"),
 }
