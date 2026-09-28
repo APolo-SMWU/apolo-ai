@@ -299,9 +299,16 @@ class WorksBlock(_ResponseModel):
     items: list[WorkItem]
 
 
+class SkillItem(_ResponseModel):
+    """Skills 전용 항목. KG Skill Entity와 표시 이름을 함께 보존한다"""
+
+    entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
+    name: SkillText
+
+
 class SkillCategory(_ResponseModel):
     category: SkillText
-    items: list[SkillText]
+    items: list[SkillItem]
 
 
 class SkillsBlock(_ResponseModel):
