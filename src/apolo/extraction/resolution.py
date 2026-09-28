@@ -96,7 +96,7 @@ def resolve_existing_entities(
     resolved_ids: dict[str, UUID] = {}
     stored_ids = {entity.id for entity in existing}
     pool = list(existing)
-    # 학력·경력·활동은 소속 기관의 ID가 정해진 뒤에 비교한다.
+    # 학력·경력·활동은 소속 기관의 ID가 정해진 뒤에 비교한다
     order = {
         "Organization": 0,
         "Work": 1,
@@ -147,7 +147,7 @@ def resolve_existing_entities(
             else:
                 unmatched.append(ref)
                 new_ids[ref] = entity_id
-            # 이번 묶음에서 추가로 확인한 이름·URL도 뒤따르는 후보의 식별에 사용한다.
+            # 이번 묶음에서 추가로 확인한 이름·URL도 뒤따르는 후보의 식별에 사용한다
             for index, item in enumerate(pool):
                 if item.id == entity_id:
                     merged_facts = {

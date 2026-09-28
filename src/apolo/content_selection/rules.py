@@ -1,5 +1,5 @@
-"""요구사항에 따라 Graph B 입력 후보 범위를 결정한다.
-이 단계에서는 명시적인 범주 단어와 KG 관계만 사용해 LLM에 전달할 후보를 줄인다.
+"""요구사항에 따라 Graph B 입력 후보 범위를 결정한다
+이 단계에서는 명시적인 범주 단어와 KG 관계만 사용해 LLM에 전달할 후보를 줄인다
 """
 
 from dataclasses import dataclass
@@ -42,9 +42,9 @@ class ContentSelection:
 def select_relevant_knowledge(
     graph: ActiveKnowledgeGraph, requirements: str = ""
 ) -> ContentSelection:
-    """요구사항과 Person에서 연결된 Entity를 기준으로 콘텐츠 후보를 선별한다.
+    """요구사항과 Person에서 연결된 Entity를 기준으로 콘텐츠 후보를 선별한다
 
-    명시적인 범주가 없으면 모든 콘텐츠 Entity를 유지한다.
+    명시적인 범주가 없으면 모든 콘텐츠 Entity를 유지한다
     """
     requested_classes = _classes_from_requirements(requirements)
     selected_content_classes = requested_classes or _CONTENT_CLASSES
