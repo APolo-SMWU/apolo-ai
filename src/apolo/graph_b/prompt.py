@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from apolo.content_selection.rules import ContentSelection
 from apolo.contracts.content import graph_b_output_json_schema
 from apolo.graph_b.prompts import BLOCK_PROMPTS, COMMON_PROMPT
+from apolo.graph_b.prompts.about import ABOUT_PROMPT
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ def build_content_generation_prompt(
         for class_type in sorted(selection.selected_classes)
         if class_type in BLOCK_PROMPTS
     ]
-    system = "\n\n".join([COMMON_PROMPT, *block_prompts])
+    system = "\n\n".join([COMMON_PROMPT, ABOUT_PROMPT, *block_prompts])
     user = "\n\n".join(
         [
             "Graph B 출력 JSON Schema:\n"

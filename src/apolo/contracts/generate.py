@@ -19,6 +19,9 @@ ShortText = Annotated[
 LongText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)
 ]
+AboutDescription = Annotated[
+    str, StringConstraints(strip_whitespace=True, max_length=10_000)
+]
 SkillText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
 ]
@@ -66,7 +69,7 @@ class AboutBlock(_ResponseModel):
 
     type: Literal["about"] = "about"
     visible: bool = True
-    body: LongText
+    description: AboutDescription
 
 
 TimelineItemKind = Literal[
