@@ -33,6 +33,7 @@ EXTRACTABLE_RELATIONS: Final[frozenset[RelationType]] = frozenset(
         "hasExperience",
         "participatedIn",
         "holds",
+        "hasSkill",
         "atOrganization",
         "usesSkill",
         "partOf",

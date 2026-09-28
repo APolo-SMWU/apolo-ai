@@ -23,6 +23,7 @@ RelationType = Literal[
     "hasExperience",
     "participatedIn",
     "holds",
+    "hasSkill",
     "hasChannel",
     "atOrganization",
     "usesSkill",
@@ -124,6 +125,7 @@ RELATION_PAIRS: Final[dict[RelationType, frozenset[tuple[ClassType, ClassType]]]
     "hasExperience": frozenset({("Person", "Experience")}),
     "participatedIn": frozenset({("Person", "Activity"), ("Person", "Work")}),
     "holds": frozenset({("Person", "Credential")}),
+    "hasSkill": frozenset({("Person", "Skill")}),
     "hasChannel": frozenset({("Person", "Channel")}),
     "atOrganization": frozenset(
         {

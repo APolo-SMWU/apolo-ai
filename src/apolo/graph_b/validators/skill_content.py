@@ -69,12 +69,12 @@ def validate_skill_content(
 
 
 def _supported_skills_by_category(graph: ActiveKnowledgeGraph) -> dict[str, set[str]]:
-    """usesSkill로 사용된 Skill을 category별로 묶는다"""
+    """Person 보유 기술과 Work·Experience 사용 기술을 category별로 묶는다"""
 
     used_skill_ids = {
         relation.object_entity_id
         for relation in graph.relations
-        if relation.predicate == "usesSkill"
+        if relation.predicate in {"hasSkill", "usesSkill"}
     }
     names_by_skill: dict = defaultdict(set)
     categories_by_skill: dict = defaultdict(set)

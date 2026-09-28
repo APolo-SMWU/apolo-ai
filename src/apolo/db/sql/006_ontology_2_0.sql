@@ -53,7 +53,7 @@ WHERE predicate = 'broader' AND status <> 'retracted';
 ALTER TABLE ai.relations DROP CONSTRAINT relations_predicate_check;
 ALTER TABLE ai.relations ADD CONSTRAINT relations_predicate_check CHECK (
     predicate IN (
-        'hasEducation', 'hasExperience', 'participatedIn', 'holds', 'hasChannel',
+        'hasEducation', 'hasExperience', 'participatedIn', 'holds', 'hasSkill', 'hasChannel',
         'atOrganization', 'usesSkill', 'partOf'
     )
     OR (predicate = 'broader' AND status = 'retracted')
