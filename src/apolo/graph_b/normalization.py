@@ -1,6 +1,7 @@
 """Graph B 출력을 현재 KG의 정규값에 맞춰 안전하게 정리한다"""
 
 import re
+import unicodedata
 from collections import defaultdict
 from uuid import UUID
 
@@ -65,11 +66,15 @@ def normalize_graph_b_output(
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, ExperienceBlock):
-            items = _normalize_experience_items(block.items, graph)
+            items = _deduplicate_timeline_items(
+                _normalize_experience_items(block.items, graph)
+            )
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, ActivitiesBlock):
-            items = _normalize_activity_items(block.items, graph)
+            items = _deduplicate_timeline_items(
+                _normalize_activity_items(block.items, graph)
+            )
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, AwardsBlock):
@@ -119,6 +124,147 @@ def _normalize_education_items(
             )
         )
     return normalized
+
+
+def _deduplicate_timeline_items(
+    items: list[EducationItem | ExperienceItem | ActivityItem],
+) -> list[EducationItem | ExperienceItem | ActivityItem]:
+    """기관·역할이 같고 기간이 겹치는 Timeline item을 하나로 합친다"""
+
+    merged: list[EducationItem | ExperienceItem | ActivityItem] = []
+    for item in items:
+        match_index = next(
+            (
+                index
+                for index, candidate in enumerate(merged)
+                if _same_timeline_identity(candidate, item)
+            ),
+            None,
+        )
+        if match_index is None:
+            merged.append(item)
+            continue
+        merged[match_index] = _merge_timeline_items(merged[match_index], item)
+    return merged
+
+
+def _same_timeline_identity(
+    current: EducationItem | ExperienceItem | ActivityItem,
+    incoming: EducationItem | ExperienceItem | ActivityItem,
+) -> bool:
+    current_organization = _organization_key(current.organization)
+    incoming_organization = _organization_key(incoming.organization)
+    if not current_organization or current_organization != incoming_organization:
+        return False
+
+    current_role = _text_key(getattr(current, "role", None))
+    incoming_role = _text_key(getattr(incoming, "role", None))
+    if current_role and incoming_role and current_role != incoming_role:
+        return False
+
+    current_kind = _text_key(getattr(current, "kind", None))
+    incoming_kind = _text_key(getattr(incoming, "kind", None))
+    if current_kind and incoming_kind and current_kind != incoming_kind:
+        return False
+
+    return _periods_overlap(
+        current.start_date,
+        current.end_date,
+        incoming.start_date,
+        incoming.end_date,
+    )
+
+
+def _merge_timeline_items(
+    current: EducationItem | ExperienceItem | ActivityItem,
+    incoming: EducationItem | ExperienceItem | ActivityItem,
+) -> EducationItem | ExperienceItem | ActivityItem:
+    """중복 item은 KG 검증을 통과한 대표 item을 유지하고 설명만 보강한다"""
+
+    representative, other = _representative_timeline_item(current, incoming)
+    if not isinstance(representative, (ExperienceItem, ActivityItem)):
+        return representative
+
+    description = _longer_text(representative.description, other.description)
+    if description == representative.description:
+        return representative
+    return representative.model_copy(update={"description": description})
+
+
+def _representative_timeline_item(
+    current: EducationItem | ExperienceItem | ActivityItem,
+    incoming: EducationItem | ExperienceItem | ActivityItem,
+) -> tuple[
+    EducationItem | ExperienceItem | ActivityItem,
+    EducationItem | ExperienceItem | ActivityItem,
+]:
+    current_score = _timeline_coverage_score(current)
+    incoming_score = _timeline_coverage_score(incoming)
+    if incoming_score > current_score:
+        return incoming, current
+    return current, incoming
+
+
+def _timeline_coverage_score(
+    item: EducationItem | ExperienceItem | ActivityItem,
+) -> tuple[int, int, int]:
+    start = _period_bound(item.start_date, is_end=False)
+    end = _period_bound(item.end_date, is_end=True)
+    span = (end - start) if start is not None and end is not None else 0
+    known_dates = int(item.start_date is not None) + int(item.end_date is not None)
+    known_fields = sum(
+        int(bool(getattr(item, field, None))) for field in ("organization", "role", "kind")
+    )
+    return span, known_dates, known_fields
+
+
+def _periods_overlap(
+    current_start: str | None,
+    current_end: str | None,
+    incoming_start: str | None,
+    incoming_end: str | None,
+) -> bool:
+    current_start_bound = _period_bound(current_start, is_end=False)
+    current_end_bound = _period_bound(current_end, is_end=True)
+    incoming_start_bound = _period_bound(incoming_start, is_end=False)
+    incoming_end_bound = _period_bound(incoming_end, is_end=True)
+    if current_end_bound is not None and incoming_start_bound is not None:
+        if current_end_bound < incoming_start_bound:
+            return False
+    if incoming_end_bound is not None and current_start_bound is not None:
+        if incoming_end_bound < current_start_bound:
+            return False
+    return True
+
+
+def _period_bound(value: str | None, *, is_end: bool) -> int | None:
+    if value is None or value == "Present":
+        return None if value is None else 10**9
+    year, _, month = value.partition(".")
+    return int(year) * 12 + (int(month) if month else (12 if is_end else 1))
+
+
+def _organization_key(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    compact = re.sub(r"[^\w가-힣]+", "", normalized, flags=re.UNICODE)
+    return compact.replace("여대", "여자대학교")
+
+
+def _text_key(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return re.sub(r"[^\w가-힣]+", "", normalized, flags=re.UNICODE)
+
+
+def _longer_text(current: str | None, incoming: str | None) -> str | None:
+    if not current:
+        return incoming
+    if not incoming:
+        return current
+    return incoming if len(incoming) > len(current) else current
 
 
 def _normalize_experience_items(
