@@ -1,5 +1,7 @@
 """Graph B가 사용할 현재 유효한 KG 조회."""
 
+from collections.abc import Collection
+
 import psycopg
 from psycopg.rows import tuple_row
 
@@ -7,18 +9,30 @@ from apolo.contracts.knowledge import ActiveKnowledgeGraph
 
 
 def load_active_knowledge_graph(
-    connection: psycopg.Connection, user_id: int
+    connection: psycopg.Connection,
+    user_id: int,
+    source_keys: Collection[str] | None = None,
 ) -> ActiveKnowledgeGraph | None:
     """사용자의 active KG를 조회하고 오래된 Source 근거를 제외한다.
 
+    ``source_keys``가 주어지면 해당 요청에서 수집한 Source의 Evidence만 사용한다.
     프로필 provenance는 Evidence 없이 사용한다. Source provenance는 연결된 Evidence 중
     하나라도 SourceDocument의 마지막 처리 해시와 일치할 때만 사용한다. 수집은 되었지만
     아직 Graph A 분석이 끝나지 않은 최신 Snapshot은 기존 처리 결과를 무효화하지 않는다.
     연결과 트랜잭션의 종료는 호출부 책임이다.
     """
+    source_scope_sql = ""
+    params: tuple[object, ...]
+    if source_keys is None:
+        params = (user_id,)
+    else:
+        scoped_keys = sorted(set(source_keys))
+        source_scope_sql = " AND document.source_key = ANY(%s)"
+        params = (scoped_keys, scoped_keys, user_id)
+
     with connection.cursor(row_factory=tuple_row) as cursor:
         cursor.execute(
-            """
+            f"""
             WITH current_fact_evidence AS (
                 SELECT
                     link.fact_id,
@@ -34,6 +48,7 @@ def load_active_knowledge_graph(
                  AND document.id = evidence.source_document_id
                 WHERE document.processed_content_hash IS NOT NULL
                   AND evidence.source_content_hash = document.processed_content_hash
+                  {source_scope_sql}
                 GROUP BY link.fact_id
             ),
             current_relation_evidence AS (
@@ -51,6 +66,7 @@ def load_active_knowledge_graph(
                  AND document.id = evidence.source_document_id
                 WHERE document.processed_content_hash IS NOT NULL
                   AND evidence.source_content_hash = document.processed_content_hash
+                  {source_scope_sql}
                 GROUP BY link.relation_id
             )
             SELECT jsonb_build_object(
@@ -147,7 +163,7 @@ def load_active_knowledge_graph(
             FROM ai.knowledge_graphs graph
             WHERE graph.user_id = %s
             """,
-            (user_id,),
+            params,
         )
         row = cursor.fetchone()
 
