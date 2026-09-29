@@ -38,6 +38,7 @@ class GraphAProcessingResult:
 
     writes: tuple[GraphASourceWrite, ...]
     warnings: tuple[GraphAProcessingWarning, ...]
+    changed: bool = False
 
 
 def process_pending_sources(
@@ -57,7 +58,7 @@ def process_pending_sources(
     warnings: list[GraphAProcessingWarning] = []
     pending = collection.sources_needing_extraction()
     if not pending:
-        return GraphAProcessingResult(tuple(writes), tuple(warnings))
+        return GraphAProcessingResult(tuple(writes), tuple(warnings), changed=False)
 
     worker_count = min(MAX_PARALLEL_EXTRACTIONS, len(pending))
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -98,7 +99,11 @@ def process_pending_sources(
                     )
                 )
 
-    return GraphAProcessingResult(tuple(writes), tuple(warnings))
+    return GraphAProcessingResult(
+        tuple(writes),
+        tuple(warnings),
+        changed=bool(writes),
+    )
 
 
 def _lock_and_load_version(connection: psycopg.Connection, graph_id: UUID) -> int:
