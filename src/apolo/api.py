@@ -1,7 +1,6 @@
 """APolo AI 서버의 FastAPI 진입점."""
 
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
@@ -33,16 +32,6 @@ from apolo.seed.persistence import ensure_profile_seed
 from apolo.source_collection import collect_and_store_public_sources
 
 app = FastAPI(title="APolo AI")
-
-
-@dataclass(frozen=True)
-class GraphARunResult:
-    """Graph A 경고와 실제 KG 변경 여부"""
-
-    warnings: list[GenerateWarning]
-    changed: bool
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -74,8 +63,9 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
 
             warnings: list[GenerateWarning] = []
             if source_urls:
-                graph_a_result = await _run_graph_a(connection, seed.id, source_urls)
-                warnings.extend(graph_a_result.warnings)
+                warnings.extend(
+                    await _run_graph_a(connection, seed.id, source_urls)
+                )
 
             graph_b_result, graph_b_warnings = _run_graph_b(
                 connection, request.user_id, request.requirements
@@ -116,18 +106,7 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
                     ],
                 )
 
-            graph_a_result = await _run_graph_a(connection, seed.id, request.source_links)
-            warnings = list(graph_a_result.warnings)
-            if not graph_a_result.changed and not warnings:
-                latest_seed = load_seed_by_user_id(connection, request.user_id) or seed
-                return GenerateResponse(
-                    blocks=[],
-                    meta=GenerateMeta(
-                        ontology_schema_version=latest_seed.ontology_schema_version,
-                        knowledge_graph_version=latest_seed.version,
-                    ),
-                )
-
+            warnings = await _run_graph_a(connection, seed.id, request.source_links)
             graph_b_result, graph_b_warnings = _run_graph_b(
                 connection, request.user_id, request.requirements
             )
@@ -154,7 +133,7 @@ async def _run_graph_a(
     connection,
     graph_id,
     source_urls: list[str],
-) -> GraphARunResult:
+) -> list[GenerateWarning]:
     """공개 Source 수집과 Graph A 실행 결과를 API 경고로 변환"""
     try:
         async with httpx.AsyncClient() as client:
@@ -165,10 +144,7 @@ async def _run_graph_a(
                 client=client,
             )
         if not collection.collected_sources:
-            return GraphARunResult(
-                warnings=[_collection_warning(item) for item in collection.warnings],
-                changed=False,
-            )
+            return [_collection_warning(item) for item in collection.warnings]
         graph = build_graph_a()
         result = graph.invoke(
             {
@@ -185,19 +161,16 @@ async def _run_graph_a(
         )["result"]
     except Exception:
         logger.error("Graph A 처리 실패", exc_info=True)
-        return GraphARunResult(
-            warnings=[
-                GenerateWarning(
-                    code="SOURCE_PROCESSING_FAILED",
-                    message="외부 Source 처리에 실패했습니다. 프로필 정보만 반환합니다.",
-                )
-            ],
-            changed=False,
-        )
+        return [
+            GenerateWarning(
+                code="SOURCE_PROCESSING_FAILED",
+                message="외부 Source 처리에 실패했습니다. 프로필 정보만 반환합니다.",
+            )
+        ]
 
     warnings = [_collection_warning(item) for item in collection.warnings]
     warnings.extend(_graph_warning(item) for item in result.warnings)
-    return GraphARunResult(warnings=warnings, changed=result.changed)
+    return warnings
 
 
 def _collection_warning(warning: PublicCollectionWarning) -> GenerateWarning:
