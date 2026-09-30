@@ -14,6 +14,7 @@ from apolo.contracts.generate import (
     AwardsBlock,
     CertificationBlock,
     CertificationItem,
+    ContentBlock,
     EducationBlock,
     EducationItem,
     ExperienceBlock,
@@ -34,7 +35,7 @@ from apolo.graph_b.validators.common import (
     organization_names,
 )
 from apolo.graph_b.validators.skill_content import _supported_skills_by_category
-from apolo.text_similarity import similar_title
+from apolo.text_similarity import shares_core_terms, similar_description, similar_title
 
 _BLOCK_RELATIONS = {
     "education": ("Education", "hasEducation"),
@@ -105,6 +106,7 @@ def normalize_graph_b_output(
 
     if not about_seen:
         normalized_blocks.insert(0, AboutBlock(description=""))
+    normalized_blocks = _merge_project_participation_into_works(normalized_blocks, graph)
     return GraphBOutput(blocks=normalized_blocks)
 
 
@@ -168,9 +170,11 @@ def _same_timeline_identity(
     incoming_organization = _organization_key(incoming.organization)
     if not current_organization or not incoming_organization:
         return False
-    if not (
-        current_organization == incoming_organization
-        or similar_title(current.organization or "", incoming.organization or "")
+    if not _organizations_compatible(
+        current_organization,
+        incoming_organization,
+        current.organization or "",
+        incoming.organization or "",
     ):
         return False
 
@@ -188,15 +192,14 @@ def _same_timeline_identity(
         incoming_names = fact_values(
             entity_facts(graph, UUID(incoming.entity_id)), "name"
         )
-        if not any(
-            similar_title(left, right)
-            for left in current_names
-            for right in incoming_names
-        ):
+        current_labels = _timeline_identity_labels(current, current_names)
+        incoming_labels = _timeline_identity_labels(incoming, incoming_names)
+        if not _labels_share_identity(current_labels, incoming_labels):
             return False
         # 같은 활동명의 세부 역할·기여는 병합할 설명으로 취급한다.
-    elif current_role and incoming_role and not similar_title(
-        current_role, incoming_role
+    elif current_role and incoming_role and not (
+        similar_title(current_role, incoming_role)
+        or shares_core_terms(current_role, incoming_role)
     ):
         return False
 
@@ -247,7 +250,7 @@ def _representative_timeline_item(
 
 def _timeline_coverage_score(
     item: EducationItem | ExperienceItem | ActivityItem,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     start = _period_bound(item.start_date, is_end=False)
     end = _period_bound(item.end_date, is_end=True)
     span = (end - start) if start is not None and end is not None else 0
@@ -255,7 +258,8 @@ def _timeline_coverage_score(
     known_fields = sum(
         int(bool(getattr(item, field, None))) for field in ("organization", "role", "kind")
     )
-    return span, known_dates, known_fields
+    organization_length = len(getattr(item, "organization", None) or "")
+    return span, known_dates, known_fields, organization_length
 
 
 def _periods_overlap(
@@ -290,6 +294,33 @@ def _organization_key(value: str | None) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     compact = re.sub(r"[^\w가-힣]+", "", normalized, flags=re.UNICODE)
     return compact.replace("여대", "여자대학교")
+
+
+def _organizations_compatible(
+    current_key: str, incoming_key: str, current: str, incoming: str
+) -> bool:
+    if current_key == incoming_key:
+        return True
+    if similar_title(current, incoming):
+        return True
+    # Notion may alternate between an institution and its department/team name.
+    shorter, longer = sorted((current_key, incoming_key), key=len)
+    return len(shorter) >= 4 and shorter in longer
+
+
+def _timeline_identity_labels(
+    item: ActivityItem | ExperienceItem, names: set[str]
+) -> set[str]:
+    labels = set(names)
+    for field in ("organization", "role", "description"):
+        value = getattr(item, field, None)
+        if value:
+            labels.add(value)
+    return labels
+
+
+def _labels_share_identity(left: set[str], right: set[str]) -> bool:
+    return any(similar_title(a, b) or shares_core_terms(a, b) for a in left for b in right)
 
 
 def _text_key(value: str | None) -> str:
@@ -458,7 +489,10 @@ def _same_credential_identity(
 ) -> bool:
     if current.entity_id == incoming.entity_id:
         return True
-    if not similar_title(current.title, incoming.title):
+    if not (
+        similar_title(current.title, incoming.title)
+        or shares_core_terms(current.title, incoming.title)
+    ):
         return False
     if current.date and incoming.date and current.date != incoming.date:
         return False
@@ -562,17 +596,119 @@ def _same_work_identity(
 ) -> bool:
     if current.entity_id == incoming.entity_id:
         return True
-    if current.kind != incoming.kind or not similar_title(
-        current.title, incoming.title
-    ):
+    if current.kind != incoming.kind:
         return False
     current_urls = _work_urls(graph, current.entity_id)
     incoming_urls = _work_urls(graph, incoming.entity_id)
-    return not (current_urls and incoming_urls and current_urls.isdisjoint(incoming_urls))
+    shared_urls = current_urls & incoming_urls
+    if current_urls and incoming_urls and not shared_urls:
+        return False
+    if shared_urls:
+        return True
+    return (
+        similar_title(current.title, incoming.title)
+        or shares_core_terms(current.title, incoming.title)
+        or similar_description(current.description or "", incoming.description or "")
+        or similar_description(current.title, incoming.description or "")
+        or similar_description(incoming.title, current.description or "")
+    )
 
 
 def _work_urls(graph: ActiveKnowledgeGraph, entity_id: str) -> set[str]:
     return fact_values(entity_facts(graph, UUID(entity_id)), "url")
+
+
+def _merge_project_participation_into_works(
+    blocks: list[ContentBlock], graph: ActiveKnowledgeGraph
+) -> list[ContentBlock]:
+    """프로젝트 참여만 반복하는 Activity는 일치하는 Work 설명에 흡수한다."""
+    work_blocks = [block for block in blocks if isinstance(block, WorksBlock)]
+    activity_blocks = [block for block in blocks if isinstance(block, ActivitiesBlock)]
+    if not work_blocks or not activity_blocks:
+        return blocks
+
+    works = [item for block in work_blocks for item in block.items]
+    updated_works: dict[str, WorkItem] = {item.entity_id: item for item in works}
+    updated_blocks = []
+    for block in blocks:
+        if not isinstance(block, ActivitiesBlock):
+            updated_blocks.append(block)
+            continue
+
+        retained = []
+        for activity in block.items:
+            if not _is_generic_project_participation(activity):
+                retained.append(activity)
+                continue
+            match = next(
+                (
+                    updated_works[work.entity_id]
+                    for work in works
+                    if _activity_matches_work(
+                        activity, updated_works[work.entity_id], graph
+                    )
+                ),
+                None,
+            )
+            if match is None:
+                retained.append(activity)
+                continue
+            updated_works[match.entity_id] = match.model_copy(
+                update={
+                    "description": _merge_descriptions(
+                        match.description, activity.description
+                    )
+                }
+            )
+        if retained:
+            updated_blocks.append(block.model_copy(update={"items": retained}))
+
+    return [
+        block.model_copy(
+            update={"items": [updated_works[item.entity_id] for item in block.items]}
+        )
+        if isinstance(block, WorksBlock)
+        else block
+        for block in updated_blocks
+    ]
+
+
+def _is_generic_project_participation(item: ActivityItem) -> bool:
+    if item.role:
+        return False
+    text = " ".join(value for value in (item.description, item.organization) if value)
+    if not re.search(
+        r"(프로젝트|연구|과제|project|research).{0,24}(참여|수행|participat)",
+        text,
+        re.I,
+    ):
+        return False
+    specific_contribution = re.compile(
+        r"(개발|구현|제작|설계|분석|평가|검증|개선|구축|운영|기획|담당|멘토링|교육|발표|수상|"
+        r"develop|implement|design|analy[sz]|evaluate|build|create|lead|teach)",
+        re.I,
+    )
+    return specific_contribution.search(text) is None
+
+
+def _activity_matches_work(
+    activity: ActivityItem, work: WorkItem, graph: ActiveKnowledgeGraph
+) -> bool:
+    activity_context = _entity_context(graph, activity.entity_id, "activities")
+    work_context = _entity_context(graph, work.entity_id, "works")
+    if activity_context is None or work_context is None:
+        return False
+    _, activity_facts = activity_context
+    _, work_facts = work_context
+    activity_labels = fact_values(activity_facts, "name") | {
+        activity.organization,
+        activity.description or "",
+    }
+    work_labels = fact_values(work_facts, "title") | {
+        work.title,
+        work.description or "",
+    }
+    return _labels_share_identity(activity_labels, work_labels)
 
 
 def _representative_work(
