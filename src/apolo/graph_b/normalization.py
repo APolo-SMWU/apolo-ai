@@ -3,6 +3,7 @@
 import re
 import unicodedata
 from collections import defaultdict
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from apolo.contracts.content import GraphBOutput
@@ -19,6 +20,7 @@ from apolo.contracts.generate import (
     EducationItem,
     ExperienceBlock,
     ExperienceItem,
+    ProjectLink,
     SkillCategory,
     SkillItem,
     SkillsBlock,
@@ -536,8 +538,18 @@ def _normalize_work_items(
         seen_urls: set[str] = set()
         for link in item.links:
             if link.href in supported_urls and link.href not in seen_urls:
-                links.append(link)
+                label = _work_url_label(link.href)
+                if label is None:
+                    continue
+                links.append(link.model_copy(update={"label": label}))
                 seen_urls.add(link.href)
+        for href in sorted(supported_urls):
+            if href in seen_urls:
+                continue
+            label = _work_url_label(href)
+            if label is not None:
+                links.append(ProjectLink(label=label, href=href))
+                seen_urls.add(href)
         normalized.append(
             item.model_copy(
                 update={
@@ -550,6 +562,18 @@ def _normalize_work_items(
             )
         )
     return normalized
+
+
+def _work_url_label(href: str) -> str | None:
+    """Work.url 중 화면에서 지원하는 HTTP(S) URL에 의미 기반 label 부여"""
+    try:
+        parsed = urlsplit(href)
+        hostname = parsed.hostname
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or hostname is None:
+        return None
+    return "GitHub" if hostname in {"github.com", "www.github.com"} else "Link"
 
 
 def _deduplicate_work_items(

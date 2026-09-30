@@ -52,6 +52,7 @@ WORKS_PROMPT = dedent(
     Few-shot description 예시:
     {_WORKS_DESCRIPTION_FEWSHOT}
     works의 links는 Work의 url fact만 label과 href로 변환한다.
+    github.com 저장소 URL의 label은 'GitHub', 그 외 명시된 URL의 label은 'Link'로 작성한다.
     확인된 URL이 없으면 links는 빈 배열을 사용한다.
     AI가 URL이나 imageUrl을 새로 만들지 않는다.
     imageUrl은 제공된 근거에 명시된 이미지 URL만 사용한다.
