@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from apolo.collectors.public import PublicCollectionWarning
+from apolo.contracts.cv import CvGenerateRequest, CvGenerateResponse
 from apolo.contracts.generate import (
     GenerateMeta,
     GenerateRequest,
@@ -18,7 +19,11 @@ from apolo.contracts.generate import (
 )
 from apolo.contracts.profile import SeedProfileInput
 from apolo.contracts.update_content import UpdateContentRequest
+from apolo.cv.assemble import assemble_cv
+from apolo.cv.candidates import build_cv_candidates
+from apolo.cv.client import OpenAICvGenerationClient
 from apolo.db.connection import connect_db
+from apolo.db.knowledge import load_active_knowledge_graph
 from apolo.db.seed import load_seed_by_user_id
 from apolo.generation import build_graph_b_response, build_profile_only_response
 from apolo.graph_a.processing import GraphAProcessingWarning
@@ -144,6 +149,57 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
     except Exception:
         logger.error("Source 갱신 실패", exc_info=True)
         raise HTTPException(status_code=500, detail="콘텐츠 갱신 중 오류가 발생했습니다.") from None
+
+
+@app.post("/generate-cv", response_model=CvGenerateResponse, response_model_exclude_none=True)
+def generate_cv(request: CvGenerateRequest) -> CvGenerateResponse:
+    """사용자의 현재 KG에서 CV 섹션을 생성한다. LLM 호출이 길어 DB 연결은 조회 직후 닫는다."""
+    try:
+        with connect_db() as connection:
+            graph = load_active_knowledge_graph(connection, request.user_id)
+    except Exception:
+        logger.error("CV용 KG 조회 실패", exc_info=True)
+        raise HTTPException(status_code=500, detail="CV 생성 중 오류가 발생했습니다.") from None
+
+    if graph is None:
+        return _empty_cv_response(
+            0, "CV_KG_NOT_FOUND", "사용자의 Knowledge Graph를 찾지 못했습니다."
+        )
+    meta = GenerateMeta(
+        ontology_schema_version=graph.ontology_schema_version,
+        knowledge_graph_version=graph.version,
+    )
+    candidates = build_cv_candidates(graph)
+    if not candidates:
+        return _empty_cv_response(
+            graph.version, "CV_NO_CANDIDATES", "CV에 넣을 수 있는 항목이 KG에 없습니다."
+        )
+
+    try:
+        output = OpenAICvGenerationClient(
+            load_llm_settings(), load_langsmith_settings()
+        ).generate(candidates, request.requirements)
+    except Exception:
+        logger.error("CV 생성 실패", exc_info=True)
+        raise HTTPException(status_code=500, detail="CV 생성 중 오류가 발생했습니다.") from None
+
+    assembled = assemble_cv(candidates, output)
+    warnings = list(assembled.warnings)
+    if not assembled.sections:
+        warnings.append(
+            GenerateWarning(code="CV_EMPTY", message="생성된 CV 항목이 없습니다.")
+        )
+    return CvGenerateResponse(sections=assembled.sections, meta=meta, warnings=warnings)
+
+
+def _empty_cv_response(version: int, code: str, message: str) -> CvGenerateResponse:
+    return CvGenerateResponse(
+        sections=[],
+        meta=GenerateMeta(
+            ontology_schema_version=ONTOLOGY_VERSION, knowledge_graph_version=version
+        ),
+        warnings=[GenerateWarning(code=code, message=message)],
+    )
 
 
 async def _run_graph_a(

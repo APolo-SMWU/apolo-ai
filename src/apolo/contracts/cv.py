@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from apolo.contracts.content import _make_object_properties_required
+from apolo.contracts.generate import GenerateMeta, GenerateWarning
 
 Line = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 EntityId = Annotated[str, Field(min_length=1, pattern=r"\S")]
@@ -56,3 +57,20 @@ class CvSectionOut(_CvModel):
     title: str
     layout: Literal["entries", "bullets"]
     entries: list[CvEntryOut]
+
+
+class CvGenerateRequest(BaseModel):
+    """Backend가 로그인한 사용자의 CV 생성을 요청하는 입력"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    user_id: int = Field(gt=0, alias="userId")
+    requirements: str = Field(default="", max_length=2_000)
+
+
+class CvGenerateResponse(_CvModel):
+    """헤더(이름·연락처)는 Backend가 구성한다. AI는 섹션·메타데이터·경고만 반환한다"""
+
+    sections: list[CvSectionOut]
+    meta: GenerateMeta
+    warnings: list[GenerateWarning] = Field(default_factory=list)
