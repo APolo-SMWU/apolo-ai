@@ -17,11 +17,48 @@ class ContentGenerationPrompt:
     user: str
 
 
+def _compact_graph_payload(selection: ContentSelection) -> dict[str, object]:
+    """프롬프트에서 반복되는 원문 evidence를 카탈로그로 모은다."""
+    payload = selection.graph.model_dump(mode="json")
+    evidence_by_content: dict[tuple[str, str, str, str], str] = {}
+    evidence_catalog: list[dict[str, str]] = []
+
+    for collection_name in ("entities", "facts", "relations"):
+        for item in payload[collection_name]:
+            evidence_refs: list[str] = []
+            for evidence in item.pop("evidence", []):
+                key = (
+                    evidence["source_document_id"],
+                    evidence["source_content_hash"],
+                    evidence["locator"],
+                    evidence["snippet"],
+                )
+                ref = evidence_by_content.get(key)
+                if ref is None:
+                    ref = f"e{len(evidence_catalog) + 1}"
+                    evidence_by_content[key] = ref
+                    evidence_catalog.append(
+                        {
+                            "ref": ref,
+                            "source_document_id": key[0],
+                            "source_content_hash": key[1],
+                            "locator": key[2],
+                            "snippet": key[3],
+                        }
+                    )
+                if ref not in evidence_refs:
+                    evidence_refs.append(ref)
+            item["evidence_refs"] = evidence_refs
+
+    payload["evidence_catalog"] = evidence_catalog
+    return payload
+
+
 def build_content_generation_prompt(
     selection: ContentSelection, requirements: str = ""
 ) -> ContentGenerationPrompt:
     """선별된 KG와 요구사항을 콘텐츠 생성 요청으로 변환"""
-    graph_payload = selection.graph.model_dump(mode="json")
+    graph_payload = _compact_graph_payload(selection)
     block_prompts = [
         BLOCK_PROMPTS[class_type]
         for class_type in sorted(selection.selected_classes)
