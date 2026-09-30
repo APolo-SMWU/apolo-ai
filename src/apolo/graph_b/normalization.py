@@ -198,7 +198,9 @@ def _same_timeline_identity(
         incoming_labels = _timeline_identity_labels(incoming, incoming_names)
         if not _labels_share_identity(current_labels, incoming_labels):
             return False
-        # 같은 활동명의 세부 역할·기여는 병합할 설명으로 취급한다.
+        if current_role and incoming_role and current_role != incoming_role:
+            # 다른 KG Entity의 역할 근거는 한 Entity의 item에 합치지 않는다.
+            return False
     elif current_role and incoming_role and not (
         similar_title(current_role, incoming_role)
         or shares_core_terms(current_role, incoming_role)
@@ -224,16 +226,51 @@ def _merge_timeline_items(
         return representative
 
     description = _merge_descriptions(representative.description, other.description)
+    role = representative.role
     if isinstance(representative, ActivityItem) and isinstance(other, ActivityItem):
-        if (
-            representative.role
-            and other.role
-            and _text_key(representative.role) != _text_key(other.role)
-        ):
-            description = _merge_descriptions(description, other.role)
-    if description == representative.description:
+        if representative.entity_id == other.entity_id:
+            role = _merge_activity_roles(representative.role, other.role)
+    if description == representative.description and role == representative.role:
         return representative
-    return representative.model_copy(update={"description": description})
+    return representative.model_copy(update={"description": description, "role": role})
+
+
+def _merge_activity_roles(current: str | None, incoming: str | None) -> str | None:
+    """같은 Activity의 중복 결과에서 역할 명칭만 role 필드에 합친다."""
+    labels: list[str] = []
+    seen: set[str] = set()
+    for role in (current, incoming):
+        if not role:
+            continue
+        for label in _activity_role_parts(role):
+            key = _text_key(label)
+            if not label or key in seen:
+                continue
+            candidate = ", ".join([*labels, label])
+            if len(candidate) > 200:
+                continue
+            labels.append(label)
+            seen.add(key)
+    return ", ".join(labels) or None
+
+
+def _normalize_activity_role(value: str | None, candidates: set[str]) -> str | None:
+    if value is None or value in candidates:
+        return value
+    supported_parts = {
+        _text_key(part): part
+        for candidate in sorted(candidates)
+        for part in _activity_role_parts(candidate)
+    }
+    parts = _activity_role_parts(value)
+    if parts and all(_text_key(part) in supported_parts for part in parts):
+        canonical_parts = [supported_parts[_text_key(part)] for part in parts]
+        return _merge_activity_roles(None, ", ".join(canonical_parts))
+    return _optional_value(value, candidates)
+
+
+def _activity_role_parts(role: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[,;\n]+", role) if part.strip()]
 
 
 def _representative_timeline_item(
@@ -391,7 +428,7 @@ def _normalize_activity_items(
             item.model_copy(
                 update={
                     "organization": organization,
-                    "role": _optional_value(item.role, fact_values(facts, "role")),
+                    "role": _normalize_activity_role(item.role, fact_values(facts, "role")),
                     "kind": _optional_value(
                         item.kind, fact_values(facts, "kind") & _ACTIVITY_KINDS
                     ),
