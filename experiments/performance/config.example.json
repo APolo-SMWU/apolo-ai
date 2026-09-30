@@ -1,0 +1,29 @@
+{
+  "base_url": "http://127.0.0.1:8101",
+  "timeout_seconds": 300,
+  "repetitions": 3,
+  "user_id_base": 990100,
+  "model": "gpt-6-luna",
+  "requirements": "",
+  "expected_block_types": [],
+  "profile": {
+    "name": "성능 실험 사용자",
+    "email": "performance-test@example.com",
+    "phone": null,
+    "github": null,
+    "company": null,
+    "jobTitle": null,
+    "tel": null,
+    "university": null,
+    "department": null,
+    "major": null
+  },
+  "sources": {
+    "notion": [
+      "https://hyper-breakfast-e73.notion.site/Portfolio-Miji-Kim-3abfbcc778da80ebaf4cdf8226cae3cf?source=copy_link"
+    ],
+    "github": [
+      "https://github.com/miji0"
+    ]
+  }
+}

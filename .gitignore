@@ -9,3 +9,5 @@ __pycache__/
 tests/*
 !tests/test_entity_evidence.py
 !tests/test_graph_b_normalization.py
+experiments/performance/config.json
+experiments/performance/results/
