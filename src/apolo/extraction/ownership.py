@@ -42,15 +42,15 @@ def add_source_ownership_relations(
         return extraction
 
     entities = {entity.ref: entity for entity in extraction.entities}
-    facts_by_ref: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    facts_by_ref: dict[str, list[tuple[str, list[str]]]] = defaultdict(list)
     for fact in extraction.facts:
-        facts_by_ref[fact.entity_ref].append((fact.predicate, fact.evidence))
+        facts_by_ref[fact.entity_ref].append((fact.predicate, fact.evidence_refs))
 
-    organization_evidence: dict[str, list[str]] = defaultdict(list)
+    organization_evidence: dict[str, list[list[str]]] = defaultdict(list)
     skill_used_by: set[str] = set()
     for relation in extraction.relations:
         if relation.predicate == "atOrganization":
-            organization_evidence[relation.subject_ref].append(relation.evidence)
+            organization_evidence[relation.subject_ref].append(relation.evidence_refs)
         elif relation.predicate == "usesSkill":
             skill_used_by.add(relation.object_ref)
 
@@ -77,7 +77,7 @@ def add_source_ownership_relations(
                 subject_ref="self",
                 predicate=predicate,
                 object_ref=entity.ref,
-                evidence=evidence,
+                evidence_refs=evidence,
                 confidence=0.55,
             )
         )
@@ -89,18 +89,18 @@ def add_source_ownership_relations(
 
 def _ownership_evidence(
     entity: EntityCandidate,
-    facts_by_ref: dict[str, list[tuple[str, str]]],
-    organization_evidence: dict[str, list[str]],
-) -> str | None:
+    facts_by_ref: dict[str, list[tuple[str, list[str]]]],
+    organization_evidence: dict[str, list[list[str]]],
+) -> list[str] | None:
     identity_predicate = _IDENTITY_PREDICATES.get(entity.class_type)
     if identity_predicate is not None:
         for predicate, evidence in facts_by_ref.get(entity.ref, []):
-            if predicate == identity_predicate and evidence.strip():
+            if predicate == identity_predicate and evidence:
                 return evidence
     for evidence in organization_evidence.get(entity.ref, []):
-        if evidence.strip():
+        if evidence:
             return evidence
     for _, evidence in facts_by_ref.get(entity.ref, []):
-        if evidence.strip():
+        if evidence:
             return evidence
     return None

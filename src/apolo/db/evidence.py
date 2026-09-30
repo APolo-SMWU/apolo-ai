@@ -42,10 +42,11 @@ def save_evidence(
     graph_id: UUID,
     evidence: Evidence,
     *,
+    entity_ids: tuple[UUID, ...] = (),
     fact_ids: tuple[UUID, ...] = (),
     relation_ids: tuple[UUID, ...] = (),
 ) -> None:
-    """근거와 연결을 원자적으로 추가한다. 같은 ID·내용·연결의 재저장은 허용한다.
+    """근거와 Entity·Fact·Relation 연결을 원자적으로 추가하고 같은 연결은 멱등 처리한다.
 
     같은 근거 ID의 내용 변경은 거부한다. 새 내용은 새 ID를 사용한다.
     기존 연결을 제거하지 않으며, 연결 없는 근거도 저장할 수 있다.
@@ -80,6 +81,21 @@ def save_evidence(
         stored = cursor.fetchone()
         if stored is None or Evidence.model_validate_json(stored[0]) != evidence:
             raise ValueError("기존 Evidence ID의 KG 또는 내용을 변경할 수 없습니다.")
+
+        for entity_id in sorted(set(entity_ids)):
+            cursor.execute(
+                "SELECT class_type FROM ai.entities "
+                "WHERE id=%s AND graph_id=%s AND status='active' FOR KEY SHARE",
+                (entity_id, graph_id),
+            )
+            entity = cursor.fetchone()
+            if entity is None or entity[0] not in {"Work", "Activity"}:
+                raise ValueError("설명 생성 근거에는 같은 KG의 Work·Activity Entity가 필요합니다.")
+            cursor.execute(
+                "INSERT INTO ai.entity_evidence (graph_id,entity_id,evidence_id) "
+                "VALUES (%s,%s,%s) ON CONFLICT (entity_id,evidence_id) DO NOTHING",
+                (graph_id, entity_id, evidence.id),
+            )
 
         for fact_id in sorted(set(fact_ids)):
             cursor.execute(

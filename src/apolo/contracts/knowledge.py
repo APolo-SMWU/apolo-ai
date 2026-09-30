@@ -27,6 +27,7 @@ class ActiveKnowledgeEntity(BaseModel):
     status: Literal["active"] = "active"
     created_at: AwareDatetime
     updated_at: AwareDatetime
+    evidence: list[Evidence] = Field(default_factory=list)
 
 
 class ActiveKnowledgeFact(BaseModel):

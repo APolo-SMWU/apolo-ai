@@ -71,7 +71,9 @@ def apply_source_extraction(
             current_source_document_id=stored.document.id,
             current_source_content_hash=stored.snapshot.content_hash,
         )
-        _connect_evidence(connection, graph_id, source, stored, persistent, persisted)
+        _connect_evidence(
+            connection, graph_id, source, stored, persistent, persisted, resolution
+        )
         _mark_source_processed(cursor, graph_id, stored, now)
         cursor.execute(
             "UPDATE ai.knowledge_graphs SET version=%s,updated_at=%s WHERE id=%s AND version=%s",
@@ -115,8 +117,9 @@ def _connect_evidence(
     stored: PersistedCollectedSource,
     extraction: ExtractionResult,
     persisted: PersistedExtraction,
+    resolution: EntityResolution,
 ) -> None:
-    """후보가 인용한 현재 원문 조각만 Fact·Relation에 연결"""
+    """현재 원문 Evidence를 Fact·Relation 또는 Work·Activity Entity에 연결"""
     evidence = load_matching_source_evidence(
         connection,
         graph_id,
@@ -125,33 +128,53 @@ def _connect_evidence(
         source.evidence_candidates,
     )
     evidence_by_pair = {(item.snippet, item.locator): item for item in evidence}
-    links: dict[UUID, tuple[set[UUID], set[UUID]]] = {}
+    links: dict[UUID, tuple[set[UUID], set[UUID], set[UUID]]] = {}
 
-    def collect(quote: str, target_id: UUID, *, relation: bool) -> None:
-        matches = matching_source_evidence(source, quote)
-        if not matches:
-            raise ValueError("원문 근거가 없는 후보는 저장할 수 없습니다.")
-        for candidate in matches:
-            item = evidence_by_pair.get((candidate.snippet, candidate.locator))
-            if item is None:
-                raise ValueError("현재 원문 버전의 Evidence가 저장되어 있지 않습니다.")
-            fact_ids, relation_ids = links.setdefault(item.id, (set(), set()))
-            (relation_ids if relation else fact_ids).add(target_id)
+    def collect(
+        evidence_refs: list[str], target_id: UUID, *, target_type: str
+    ) -> None:
+        for locator in evidence_refs:
+            matches = matching_source_evidence(source, locator)
+            if not matches:
+                raise ValueError("원문 근거가 없는 후보는 저장할 수 없습니다.")
+            for candidate in matches:
+                item = evidence_by_pair.get((candidate.snippet, candidate.locator))
+                if item is None:
+                    raise ValueError("현재 원문 버전의 Evidence가 저장되어 있지 않습니다.")
+                entity_ids, fact_ids, relation_ids = links.setdefault(
+                    item.id, (set(), set(), set())
+                )
+                {
+                    "entity": entity_ids,
+                    "fact": fact_ids,
+                    "relation": relation_ids,
+                }[target_type].add(target_id)
 
     for index, fact in enumerate(extraction.facts):
         if index in persisted.fact_ids:
-            collect(fact.evidence, persisted.fact_ids[index], relation=False)
+            collect(fact.evidence_refs, persisted.fact_ids[index], target_type="fact")
     for index, relation in enumerate(extraction.relations):
         if index in persisted.relation_ids:
-            collect(relation.evidence, persisted.relation_ids[index], relation=True)
+            collect(
+                relation.evidence_refs, persisted.relation_ids[index], target_type="relation"
+            )
+
+    resolved_entities = resolution.matched | resolution.new_ids
+    for item in extraction.entity_evidence:
+        entity_id = resolved_entities.get(item.entity_ref)
+        if entity_id is not None:
+            collect(item.evidence_refs, entity_id, target_type="entity")
 
     for item in evidence:
-        fact_ids, relation_ids = links.get(item.id, (set(), set()))
-        if fact_ids or relation_ids:
+        entity_ids, fact_ids, relation_ids = links.get(
+            item.id, (set(), set(), set())
+        )
+        if entity_ids or fact_ids or relation_ids:
             save_evidence(
                 connection,
                 graph_id,
                 item,
+                entity_ids=tuple(entity_ids),
                 fact_ids=tuple(fact_ids),
                 relation_ids=tuple(relation_ids),
             )

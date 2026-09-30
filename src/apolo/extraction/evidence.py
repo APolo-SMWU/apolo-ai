@@ -16,46 +16,77 @@ class SourceEvidenceValidation:
 
 
 def matching_source_evidence(
-    source: CollectedSource, quote: str
+    source: CollectedSource, locator: str
 ) -> list[EvidenceCandidate]:
-    """인용문을 포함하는 원문 근거 조각을 모두 반환"""
-    if not quote.strip() or quote not in source.content:
+    """locator가 정확히 일치하는 원문 근거 조각을 반환"""
+    if not locator.strip():
         return []
     return [
         candidate
         for candidate in source.evidence_candidates
-        if candidate.snippet in source.content and quote in candidate.snippet
+        if candidate.locator == locator and candidate.snippet in source.content
     ]
+
+
+def matching_source_evidence_refs(
+    source: CollectedSource, locators: list[str]
+) -> list[EvidenceCandidate] | None:
+    """모든 locator가 근거 후보에 있으면 일치하는 후보 조각을 반환"""
+    if not locators:
+        return None
+
+    matched: dict[tuple[str, str], EvidenceCandidate] = {}
+    for locator in locators:
+        candidates = matching_source_evidence(source, locator)
+        if not candidates:
+            return None
+        matched.update(
+            {(candidate.snippet, candidate.locator): candidate for candidate in candidates}
+        )
+    return list(matched.values())
 
 
 def validate_source_evidence(
     extraction: ExtractionResult, source: CollectedSource
 ) -> SourceEvidenceValidation:
-    """온톨로지 검증 전에 근거가 없는 Fact·Relation 후보 제외"""
+    """온톨로지 검증 전에 현재 Source에서 찾을 수 없는 근거 후보 제외"""
     issues: list[ExtractionIssue] = []
     facts = []
     for index, fact in enumerate(extraction.facts):
-        if matching_source_evidence(source, fact.evidence):
+        if matching_source_evidence_refs(source, fact.evidence_refs) is not None:
             facts.append(fact)
         else:
             issues.append(
                 ExtractionIssue(
                     code="UNSUPPORTED_EVIDENCE",
                     path=f"facts[{index}]",
-                    message="인용문을 수집 원문의 근거 조각에서 찾지 못했습니다.",
+                    message="evidence_refs locator를 현재 Source에서 찾지 못했습니다.",
                 )
             )
 
     relations = []
     for index, relation in enumerate(extraction.relations):
-        if matching_source_evidence(source, relation.evidence):
+        if matching_source_evidence_refs(source, relation.evidence_refs) is not None:
             relations.append(relation)
         else:
             issues.append(
                 ExtractionIssue(
                     code="UNSUPPORTED_EVIDENCE",
                     path=f"relations[{index}]",
-                    message="인용문을 수집 원문의 근거 조각에서 찾지 못했습니다.",
+                    message="evidence_refs locator를 현재 Source에서 찾지 못했습니다.",
+                )
+            )
+
+    entity_evidence = []
+    for index, item in enumerate(extraction.entity_evidence):
+        if matching_source_evidence_refs(source, item.evidence_refs) is not None:
+            entity_evidence.append(item)
+        else:
+            issues.append(
+                ExtractionIssue(
+                    code="UNSUPPORTED_EVIDENCE",
+                    path=f"entity_evidence[{index}]",
+                    message="evidence_refs locator를 현재 Source에서 찾지 못했습니다.",
                 )
             )
 
@@ -64,6 +95,7 @@ def validate_source_evidence(
             entities=extraction.entities,
             facts=facts,
             relations=relations,
+            entity_evidence=entity_evidence,
         ),
         issues=issues,
     )

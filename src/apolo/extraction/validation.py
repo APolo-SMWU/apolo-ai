@@ -10,6 +10,7 @@ from apolo.contracts.extraction import (
     EXTRACTABLE_RELATIONS,
     SELF_REF,
     EntityCandidate,
+    EntityEvidenceCandidate,
     ExtractionResult,
     FactCandidate,
     RelationCandidate,
@@ -94,6 +95,7 @@ def validate_extraction(extraction: ExtractionResult) -> ExtractionValidation:
         for index, relation in enumerate(extraction.relations)
         if _is_valid_relation(relation, entities, f"relations[{index}]", report)
     )
+    entity_evidence = _merge_entity_evidence(extraction.entity_evidence, entities, report)
 
     unidentified = _unidentified_refs(entities, facts + uncertain, relations)
     for index, entity in enumerate(extraction.entities):
@@ -111,8 +113,16 @@ def validate_extraction(extraction: ExtractionResult) -> ExtractionValidation:
         for relation in relations
         if relation.subject_ref not in unidentified and relation.object_ref not in unidentified
     ]
+    entity_evidence = [
+        item for item in entity_evidence if item.entity_ref not in unidentified
+    ]
 
-    result = ExtractionResult(entities=list(entities.values()), facts=facts, relations=relations)
+    result = ExtractionResult(
+        entities=list(entities.values()),
+        facts=facts,
+        relations=relations,
+        entity_evidence=entity_evidence,
+    )
     return ExtractionValidation(result=result, uncertain=uncertain, issues=issues)
 
 
@@ -158,8 +168,14 @@ def _merge_facts(
         key = (fact.entity_ref, fact.predicate)
         group = groups.setdefault(key, {})
         current = group.get(fact.value)
-        if current is None or fact.confidence > current.confidence:
+        if current is None:
             group[fact.value] = fact
+        else:
+            preferred = fact if fact.confidence > current.confidence else current
+            evidence_refs = list(
+                dict.fromkeys([*current.evidence_refs, *fact.evidence_refs])
+            )
+            group[fact.value] = preferred.model_copy(update={"evidence_refs": evidence_refs})
         paths.setdefault(key, []).append(path)
 
     kept: list[FactCandidate] = []
@@ -181,9 +197,43 @@ def _merge_relations(relations: Iterable[RelationCandidate]) -> list[RelationCan
     for relation in relations:
         key = (relation.subject_ref, relation.predicate, relation.object_ref)
         current = merged.get(key)
-        if current is None or relation.confidence > current.confidence:
+        if current is None:
             merged[key] = relation
+        else:
+            preferred = relation if relation.confidence > current.confidence else current
+            evidence_refs = list(
+                dict.fromkeys([*current.evidence_refs, *relation.evidence_refs])
+            )
+            merged[key] = preferred.model_copy(update={"evidence_refs": evidence_refs})
     return list(merged.values())
+
+
+def _merge_entity_evidence(
+    evidence_items: list[EntityEvidenceCandidate],
+    entities: dict[str, EntityCandidate],
+    report: Report,
+) -> list[EntityEvidenceCandidate]:
+    """설명 생성 근거는 Work·Activity에만 허용하고 Entity별 중복 locator를 합친다."""
+    grouped: dict[str, list[str]] = {}
+    for index, item in enumerate(evidence_items):
+        entity = entities.get(item.entity_ref)
+        if entity is None:
+            report("MISSING_ENTITY", f"entity_evidence[{index}]", "가리키는 Entity가 없습니다.")
+            continue
+        if entity.class_type not in {"Work", "Activity"}:
+            report(
+                "INVALID_ENTITY_EVIDENCE_CLASS",
+                f"entity_evidence[{index}]",
+                "설명 생성용 Entity 근거는 Work 또는 Activity에만 연결할 수 있습니다.",
+            )
+            continue
+        locators = grouped.setdefault(item.entity_ref, [])
+        locators.extend(locator for locator in item.evidence_refs if locator not in locators)
+    return [
+        EntityEvidenceCandidate(entity_ref=ref, evidence_refs=locators)
+        for ref, locators in grouped.items()
+        if locators
+    ]
 
 
 def _check_fact(

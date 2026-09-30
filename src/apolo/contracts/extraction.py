@@ -4,7 +4,7 @@ origin·provenance·locked·status와 DB ID는 코드가 정한다.
 predicate·참조의 온톨로지 적합성은 별도 검증에서 항목별로 판단한다.
 """
 
-from typing import Final, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,12 +53,14 @@ class EntityCandidate(_Candidate):
 
 
 class FactCandidate(_Candidate):
-    """evidence는 원문 그대로의 조각이다. 원문 위치는 코드가 찾는다."""
+    """여러 원문 Evidence locator로 Fact를 뒷받침할 수 있다."""
 
     entity_ref: str = Field(pattern=r"^(self|e[0-9]+)$")
     predicate: str = Field(min_length=1, pattern=r"\S")
     value: str | bool
-    evidence: str = Field(min_length=1, pattern=r"\S")
+    evidence_refs: list[Annotated[str, Field(min_length=1, pattern=r"\S")]] = Field(
+        min_length=1
+    )
     confidence: float = Field(ge=0, le=1)
 
 
@@ -66,8 +68,19 @@ class RelationCandidate(_Candidate):
     subject_ref: str = Field(pattern=r"^(self|e[0-9]+)$")
     predicate: str = Field(min_length=1, pattern=r"\S")
     object_ref: str = Field(pattern=r"^(self|e[0-9]+)$")
-    evidence: str = Field(min_length=1, pattern=r"\S")
+    evidence_refs: list[Annotated[str, Field(min_length=1, pattern=r"\S")]] = Field(
+        min_length=1
+    )
     confidence: float = Field(ge=0, le=1)
+
+
+class EntityEvidenceCandidate(_Candidate):
+    """설명 생성에 참고할 Entity 단위 원문 근거 연결 후보"""
+
+    entity_ref: str = Field(pattern=r"^e[0-9]+$")
+    evidence_refs: list[Annotated[str, Field(min_length=1, pattern=r"\S")]] = Field(
+        min_length=1
+    )
 
 
 class ExtractionResult(_Candidate):
@@ -76,14 +89,16 @@ class ExtractionResult(_Candidate):
     entities: list[EntityCandidate] = Field(default_factory=list)
     facts: list[FactCandidate] = Field(default_factory=list)
     relations: list[RelationCandidate] = Field(default_factory=list)
+    entity_evidence: list[EntityEvidenceCandidate] = Field(default_factory=list)
 
 
 class StructuredExtractionResult(_Candidate):
-    """Structured Outputs 전용 응답 형식. 세 목록은 항상 명시한다."""
+    """Structured Outputs 전용 응답 형식. 네 목록은 항상 명시한다."""
 
     entities: list[EntityCandidate]
     facts: list[FactCandidate]
     relations: list[RelationCandidate]
+    entity_evidence: list[EntityEvidenceCandidate]
 
     def to_extraction_result(self) -> ExtractionResult:
         """저장·검증 단계가 쓰는 기본 후보 모델로 변환"""

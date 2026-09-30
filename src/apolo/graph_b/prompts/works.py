@@ -10,9 +10,12 @@ WORKS_PROMPT = dedent(
     works의 title은 Work의 title fact를 그대로 사용한다.
     works의 role은 Work의 role fact가 있을 때만 사용하고 근거가 없으면 null로 둔다.
     works의 skills는 usesSkill로 연결된 Skill.name만 사용하고 기술을 추론하지 않는다.
-    works의 description은 제공된 source evidence와 KG 사실을 짧게 요약한다.
+    works의 description은 해당 Work의 entity evidence와 Fact·Relation 근거로 담당 업무·기여를 구체적으로 요약한다.
+    여러 기여 내용이 근거로 있으면 각각 짧은 '•' 항목으로 작성하고, 원문에 정보가 적으면 길이를 억지로 늘리지 않는다.
+    한국어 description은 '~습니다' 문체보다 간결한 명사형·이력서 문체를 사용한다.
     description을 뒷받침할 근거가 없으면 null을 사용한다.
     근거 없는 성과·기술·수치·역할·기관을 description에 추가하지 않는다.
+    다른 Work 또는 Activity Entity의 evidence를 섞지 않는다.
     works의 links는 Work의 url fact만 label과 href로 변환한다.
     확인된 URL이 없으면 links는 빈 배열을 사용한다.
     AI가 URL이나 imageUrl을 새로 만들지 않는다.
