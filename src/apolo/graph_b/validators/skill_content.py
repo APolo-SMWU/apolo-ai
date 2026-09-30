@@ -4,7 +4,10 @@ from collections import defaultdict
 
 from apolo.contracts.generate import SkillsBlock
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
-from apolo.graph_b.skill_categories import UNCATEGORIZED_SKILL_CATEGORY
+from apolo.graph_b.skill_categories import (
+    UNCATEGORIZED_SKILL_CATEGORY,
+    skill_display_category,
+)
 from apolo.graph_b.validation_types import ContentValidationIssue
 from apolo.graph_b.validators.common import item_entity_id
 
@@ -38,7 +41,7 @@ def validate_skill_content(
                 ContentValidationIssue(
                     path=f"{category_path}.category",
                     code="SKILL_CATEGORY_UNSUPPORTED",
-                    message="Skills category가 Skill의 category fact와 일치하지 않습니다.",
+                    message="Skills category가 기술명 기반 표시 분류와 일치하지 않습니다.",
                 )
             )
             supported_items = {}
@@ -100,7 +103,7 @@ def validate_skill_content(
 
 
 def _supported_skills_by_category(graph: ActiveKnowledgeGraph) -> dict[str, dict[str, set[str]]]:
-    """Person 보유 기술과 Work·Experience 사용 기술을 category별로 묶는다"""
+    """Skills 블록에 포함 가능한 KG Skill을 표시용 분류별로 묶는다"""
 
     skill_ids = {entity.id for entity in graph.entities if entity.class_type == "Skill"}
     used_skill_ids = {
@@ -110,21 +113,20 @@ def _supported_skills_by_category(graph: ActiveKnowledgeGraph) -> dict[str, dict
         and relation.object_entity_id in skill_ids
     }
     names_by_skill: dict = defaultdict(set)
-    categories_by_skill: dict = defaultdict(set)
     for fact in graph.facts:
         if fact.entity_id not in used_skill_ids or not isinstance(fact.value, str):
             continue
         if fact.predicate == "name":
             names_by_skill[fact.entity_id].add(fact.value)
-        elif fact.predicate == "category":
-            categories_by_skill[fact.entity_id].add(fact.value)
 
     supported: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     for skill_id, names in names_by_skill.items():
-        categories = categories_by_skill.get(skill_id) or {
-            UNCATEGORIZED_SKILL_CATEGORY
-        }
-        for category in categories:
-            supported_names = supported[category][str(skill_id)]
-            supported_names.update(names)
+        categories = {skill_display_category(name) for name in names}
+        named_categories = categories - {UNCATEGORIZED_SKILL_CATEGORY}
+        category = (
+            next(iter(named_categories))
+            if len(named_categories) == 1
+            else UNCATEGORIZED_SKILL_CATEGORY
+        )
+        supported[category][str(skill_id)].update(names)
     return {category: dict(skills) for category, skills in supported.items()}

@@ -415,21 +415,28 @@ def _normalize_skill_categories(
     supported = _supported_skills_by_category(graph)
     if not supported:
         return []
+    category_by_skill_id = {
+        skill_id: category
+        for category, skills in supported.items()
+        for skill_id in skills
+    }
     categories: dict[str, dict[str, SkillItem]] = defaultdict(dict)
-    for category in block.categories:
-        category_name = _category_value(category.category, supported)
-        if category_name is None:
-            continue
-        supported_items = supported[category_name]
-        for item in category.items:
+    for _category in block.categories:
+        for item in _category.items:
             member_ids: list[str] = []
             for value in item.entity_ids:
                 parsed_id = item_entity_id(value)
                 canonical_id = str(parsed_id) if parsed_id is not None else None
-                if canonical_id in supported_items and canonical_id not in member_ids:
+                if canonical_id in category_by_skill_id and canonical_id not in member_ids:
                     member_ids.append(canonical_id)
             if not member_ids or len(member_ids) != len(item.entity_ids):
                 continue
+
+            member_categories = {category_by_skill_id[skill_id] for skill_id in member_ids}
+            if len(member_categories) != 1:
+                continue
+            category_name = member_categories.pop()
+            supported_items = supported[category_name]
             if len(member_ids) == 1:
                 candidate_names = supported_items[member_ids[0]]
                 name = item.name if item.name in candidate_names else sorted(candidate_names)[0]
@@ -543,11 +550,3 @@ def _work_skill_names(graph: ActiveKnowledgeGraph, work_id: UUID) -> set[str]:
         and fact.predicate == "name"
         and isinstance(fact.value, str)
     }
-
-
-def _category_value(value: str, supported: dict[str, dict[str, set[str]]]) -> str | None:
-    if value in supported:
-        return value
-    if len(supported) == 1:
-        return next(iter(supported))
-    return None
