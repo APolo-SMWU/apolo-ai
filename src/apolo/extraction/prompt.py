@@ -62,9 +62,15 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
         제공된 Entity class, property, relation predicate만 사용한다.
         열거 목록이 있는 property는 제공된 값 중 하나만 사용한다.
         Relation은 허용된 subjectClass → objectClass 방향 중 하나만 사용한다.
+        Notion의 [Notion section path: ...]와 근거 후보 locator의 section_path는 Collector가 블록 계층에서 만든 구조 문맥이다. 원문 사실이나 인용문으로 취급하지 않는다.
+        source_type이 notion일 때만, Work 항목이 Projects·Project·프로젝트처럼 프로젝트를 명확히 나타내는 섹션 아래 있으면 Work.kind를 project로 분류한다.
+        Open Source·오픈소스 섹션 아래 공개 저장소 항목은 opensource, Publications·논문·저술 섹션 아래 학술 결과물은 publication으로 분류한다.
+        섹션 문맥을 이용한 Work.kind 분류만 허용되는 구조 해석이다. 섹션이 모호하거나 해당 Work와의 소속을 확인할 수 없으면 kind를 만들지 않는다.
+        제목에 프로젝트·논문 단어가 있다는 이유만으로 분류하지 않는다.
         Person hasSkill은 사람의 보유 기술이 원문에 직접 명시된 경우에만 사용한다.
         Work·Experience usesSkill은 해당 맥락에서 사용된 기술에만 사용한다.
         모든 Fact와 Relation은 근거 후보에 있는 정확한 비어 있지 않은 원문 인용을 사용한다.
+        Fact evidence에는 section path 접두어나 locator를 넣지 않는다. 실제 근거 후보 snippet의 원문을 그대로 인용한다.
         원문이 후보를 뒷받침하지 않으면 그 후보를 생략한다.
         """
     ).strip()
