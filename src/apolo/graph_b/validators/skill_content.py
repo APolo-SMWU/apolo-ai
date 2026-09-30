@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from apolo.contracts.generate import SkillsBlock
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
+from apolo.graph_b.skill_categories import UNCATEGORIZED_SKILL_CATEGORY
 from apolo.graph_b.validation_types import ContentValidationIssue
 from apolo.graph_b.validators.common import item_entity_id
 
@@ -94,6 +95,9 @@ def _supported_skills_by_category(graph: ActiveKnowledgeGraph) -> dict[str, dict
 
     supported: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     for skill_id, names in names_by_skill.items():
-        for category in categories_by_skill.get(skill_id, set()):
+        categories = categories_by_skill.get(skill_id) or {
+            UNCATEGORIZED_SKILL_CATEGORY
+        }
+        for category in categories:
             supported[category][str(skill_id)].update(names)
     return {category: dict(skills) for category, skills in supported.items()}

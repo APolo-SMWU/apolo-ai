@@ -2,11 +2,14 @@
 
 from textwrap import dedent
 
+from apolo.graph_b.skill_categories import UNCATEGORIZED_SKILL_CATEGORY
+
 SKILLS_PROMPT = dedent(
-    """
+    f"""
     skills 블록은 KG의 Skill Entity만 사용한다.
     skills의 category는 Skill의 category fact를 그대로 사용한다.
-    category fact가 없는 Skill은 표시하지 않고 카테고리를 추론하지 않는다.
+    category fact가 없는 Skill은 {UNCATEGORIZED_SKILL_CATEGORY} 카테고리로 표시한다.
+    {UNCATEGORIZED_SKILL_CATEGORY}는 category fact가 없는 경우에만 사용하는 기본 카테고리다.
     skills의 items는 entityId와 Skill.name을 함께 반환한다.
     entityId는 Person hasSkill 또는 Work·Experience usesSkill로 연결된 Skill Entity를 가리킨다.
     entityId 값은 KG의 ID를 그대로 사용한다.
