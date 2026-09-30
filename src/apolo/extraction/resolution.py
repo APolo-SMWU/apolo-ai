@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from apolo.contracts.extraction import ExtractionResult
 from apolo.ontology.values import is_valid_value
+from apolo.text_similarity import similar_title
 
 StrongKeyType = Literal["work_url", "organization_homepage"]
 
@@ -139,6 +140,16 @@ def resolve_existing_entities(
                 continue
 
         matches = {item.id for item in pool if _same_entity(candidate, item)}
+        if len(matches) > 1:
+            matching_entities = [item for item in pool if item.id in matches]
+            if all(
+                _same_entity(left, right)
+                for index, left in enumerate(matching_entities)
+                for right in matching_entities[index + 1 :]
+            ):
+                # 기존 KG에 이미 저장된 중복 후보는 안정적인 ID 하나로 갱신한다.
+                # 남은 기존 ID는 Graph B의 표시 단계에서도 중복 제거한다.
+                matches = {min(matches, key=lambda entity_id: entity_id.int)}
         if len(matches) == 1:
             entity_id = next(iter(matches))
             resolved_ids[ref] = entity_id
@@ -177,18 +188,34 @@ def _same_entity(candidate: ExistingEntity, stored: ExistingEntity) -> bool:
         return False
     kind = candidate.class_type
     if kind == "Work":
-        by_url = bool(candidate.strong_keys & stored.strong_keys)
-        by_title = _shared(candidate, stored, "title")
-        return _compatible(candidate, stored, "kind") and (by_url or by_title)
+        candidate_urls = _key_values(candidate, "work_url")
+        stored_urls = _key_values(stored, "work_url")
+        by_url = bool(candidate_urls & stored_urls)
+        by_title = _similar_fact(candidate, stored, "title")
+        urls_conflict = bool(candidate_urls and stored_urls and not by_url)
+        return (
+            _compatible(candidate, stored, "kind")
+            and not urls_conflict
+            and (by_url or by_title)
+        )
     if kind == "Organization":
-        by_homepage = bool(candidate.strong_keys & stored.strong_keys)
-        by_name = _shared(candidate, stored, "name")
-        return _compatible(candidate, stored, "type") and (by_homepage or by_name)
+        candidate_homepages = _key_values(candidate, "organization_homepage")
+        stored_homepages = _key_values(stored, "organization_homepage")
+        by_homepage = bool(candidate_homepages & stored_homepages)
+        by_name = _similar_fact(candidate, stored, "name")
+        homepages_conflict = bool(
+            candidate_homepages and stored_homepages and not by_homepage
+        )
+        return (
+            _compatible(candidate, stored, "type")
+            and not homepages_conflict
+            and (by_homepage or by_name)
+        )
     if kind == "Skill":
         return _shared(candidate, stored, "name")
     if kind == "Credential":
         return (
-            _shared(candidate, stored, "title")
+            _similar_fact(candidate, stored, "title")
             and _has_values(candidate, stored, "date")
             and _compatible(candidate, stored, "date")
             and _compatible(candidate, stored, "issuerName")
@@ -197,13 +224,16 @@ def _same_entity(candidate: ExistingEntity, stored: ExistingEntity) -> bool:
     if kind == "Education":
         return (
             bool(candidate.organization_ids & stored.organization_ids)
-            and (_shared(candidate, stored, "major") or _shared(candidate, stored, "degree"))
+            and (
+                _similar_fact(candidate, stored, "major")
+                or _similar_fact(candidate, stored, "degree")
+            )
             and all(_compatible(candidate, stored, field) for field in ("major", "degree", "start"))
         )
     if kind == "Experience":
         return (
             bool(candidate.organization_ids & stored.organization_ids)
-            and _shared(candidate, stored, "role")
+            and _similar_fact(candidate, stored, "role")
             and all(
                 _compatible(candidate, stored, field)
                 for field in ("department", "kind", "start")
@@ -216,11 +246,11 @@ def _same_entity(candidate: ExistingEntity, stored: ExistingEntity) -> bool:
             or bool(candidate.organization_ids & stored.organization_ids)
         )
         return (
-            _shared(candidate, stored, "name")
+            _similar_fact(candidate, stored, "name")
             and organizations_compatible
             and all(
                 _compatible(candidate, stored, field)
-                for field in ("role", "kind", "start", "end", "isCurrent")
+                for field in ("kind", "start", "end", "isCurrent")
             )
         )
     return False
@@ -230,6 +260,22 @@ def _shared(left: ExistingEntity, right: ExistingEntity, predicate: str) -> bool
     left_values = {_normalized(value) for value in left.facts.get(predicate, ())}
     right_values = {_normalized(value) for value in right.facts.get(predicate, ())}
     return bool(left_values & right_values)
+
+
+def _similar_fact(left: ExistingEntity, right: ExistingEntity, predicate: str) -> bool:
+    left_values = left.facts.get(predicate, frozenset())
+    right_values = right.facts.get(predicate, frozenset())
+    return any(
+        isinstance(a, str) and isinstance(b, str) and similar_title(a, b)
+        for a in left_values
+        for b in right_values
+    )
+
+
+def _key_values(entity: ExistingEntity, key_type: StrongKeyType) -> set[str]:
+    return {
+        key.key_value for key in entity.strong_keys if key.key_type == key_type
+    }
 
 
 def _compatible(left: ExistingEntity, right: ExistingEntity, predicate: str) -> bool:

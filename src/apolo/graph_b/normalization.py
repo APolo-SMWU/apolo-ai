@@ -34,6 +34,7 @@ from apolo.graph_b.validators.common import (
     organization_names,
 )
 from apolo.graph_b.validators.skill_content import _supported_skills_by_category
+from apolo.text_similarity import similar_title
 
 _BLOCK_RELATIONS = {
     "education": ("Education", "hasEducation"),
@@ -67,26 +68,32 @@ def normalize_graph_b_output(
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, ExperienceBlock):
             items = _deduplicate_timeline_items(
-                _normalize_experience_items(block.items, graph)
+                _normalize_experience_items(block.items, graph), graph
             )
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, ActivitiesBlock):
             items = _deduplicate_timeline_items(
-                _normalize_activity_items(block.items, graph)
+                _normalize_activity_items(block.items, graph), graph
             )
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, AwardsBlock):
-            items = _normalize_award_items(block.items, graph)
+            items = _deduplicate_credential_items(
+                _normalize_award_items(block.items, graph)
+            )
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, CertificationBlock):
-            items = _normalize_certification_items(block.items, graph)
+            items = _deduplicate_credential_items(
+                _normalize_certification_items(block.items, graph)
+            )
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, WorksBlock):
-            items = _normalize_work_items(block.items, graph)
+            items = _deduplicate_work_items(
+                _normalize_work_items(block.items, graph), graph
+            )
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
         elif isinstance(block, SkillsBlock):
@@ -128,8 +135,9 @@ def _normalize_education_items(
 
 def _deduplicate_timeline_items(
     items: list[EducationItem | ExperienceItem | ActivityItem],
+    graph: ActiveKnowledgeGraph,
 ) -> list[EducationItem | ExperienceItem | ActivityItem]:
-    """기관·역할이 같고 기간이 겹치는 Timeline item을 하나로 합친다"""
+    """같은 Entity 또는 제목·기관·기간이 유사한 타임라인 항목을 합친다"""
 
     merged: list[EducationItem | ExperienceItem | ActivityItem] = []
     for item in items:
@@ -137,7 +145,7 @@ def _deduplicate_timeline_items(
             (
                 index
                 for index, candidate in enumerate(merged)
-                if _same_timeline_identity(candidate, item)
+                if _same_timeline_identity(candidate, item, graph)
             ),
             None,
         )
@@ -151,20 +159,45 @@ def _deduplicate_timeline_items(
 def _same_timeline_identity(
     current: EducationItem | ExperienceItem | ActivityItem,
     incoming: EducationItem | ExperienceItem | ActivityItem,
+    graph: ActiveKnowledgeGraph,
 ) -> bool:
+    if current.entity_id == incoming.entity_id:
+        return True
+
     current_organization = _organization_key(current.organization)
     incoming_organization = _organization_key(incoming.organization)
-    if not current_organization or current_organization != incoming_organization:
+    if not current_organization or not incoming_organization:
+        return False
+    if not (
+        current_organization == incoming_organization
+        or similar_title(current.organization or "", incoming.organization or "")
+    ):
         return False
 
     current_role = _text_key(getattr(current, "role", None))
     incoming_role = _text_key(getattr(incoming, "role", None))
-    if current_role and incoming_role and current_role != incoming_role:
-        return False
-
     current_kind = _text_key(getattr(current, "kind", None))
     incoming_kind = _text_key(getattr(incoming, "kind", None))
     if current_kind and incoming_kind and current_kind != incoming_kind:
+        return False
+
+    if isinstance(current, ActivityItem) and isinstance(incoming, ActivityItem):
+        current_names = fact_values(
+            entity_facts(graph, UUID(current.entity_id)), "name"
+        )
+        incoming_names = fact_values(
+            entity_facts(graph, UUID(incoming.entity_id)), "name"
+        )
+        if not any(
+            similar_title(left, right)
+            for left in current_names
+            for right in incoming_names
+        ):
+            return False
+        # 같은 활동명의 세부 역할·기여는 병합할 설명으로 취급한다.
+    elif current_role and incoming_role and not similar_title(
+        current_role, incoming_role
+    ):
         return False
 
     return _periods_overlap(
@@ -185,7 +218,14 @@ def _merge_timeline_items(
     if not isinstance(representative, (ExperienceItem, ActivityItem)):
         return representative
 
-    description = _longer_text(representative.description, other.description)
+    description = _merge_descriptions(representative.description, other.description)
+    if isinstance(representative, ActivityItem) and isinstance(other, ActivityItem):
+        if (
+            representative.role
+            and other.role
+            and _text_key(representative.role) != _text_key(other.role)
+        ):
+            description = _merge_descriptions(description, other.role)
     if description == representative.description:
         return representative
     return representative.model_copy(update={"description": description})
@@ -259,12 +299,19 @@ def _text_key(value: str | None) -> str:
     return re.sub(r"[^\w가-힣]+", "", normalized, flags=re.UNICODE)
 
 
-def _longer_text(current: str | None, incoming: str | None) -> str | None:
+def _merge_descriptions(current: str | None, incoming: str | None) -> str | None:
+    """중복 문장은 줄이고 병합된 항목의 서로 다른 설명은 보존한다"""
     if not current:
         return incoming
     if not incoming:
         return current
-    return incoming if len(incoming) > len(current) else current
+    current, incoming = current.strip(), incoming.strip()
+    current_key, incoming_key = _text_key(current), _text_key(incoming)
+    if current_key == incoming_key or current_key in incoming_key:
+        return incoming if len(incoming) > len(current) else current
+    if incoming_key in current_key:
+        return current
+    return f"{current.rstrip(' .;·')} · {incoming.lstrip(' ;·')}"
 
 
 def _normalize_experience_items(
@@ -373,6 +420,68 @@ def _normalize_credential_item(
     return item.model_copy(update=update)
 
 
+def _deduplicate_credential_items(
+    items: list[AwardItem | CertificationItem],
+) -> list[AwardItem | CertificationItem]:
+    """같은 자격·수상 항목을 ID 우선, 제목·발급처·날짜 기준으로 합친다"""
+    merged: list[AwardItem | CertificationItem] = []
+    for item in items:
+        match_index = next(
+            (
+                index
+                for index, candidate in enumerate(merged)
+                if _same_credential_identity(candidate, item)
+            ),
+            None,
+        )
+        if match_index is None:
+            merged.append(item)
+            continue
+        current = merged[match_index]
+        representative, other = _representative_credential(current, item)
+        update = {}
+        for field in ("issuer", "date"):
+            if getattr(representative, field) is None:
+                update[field] = getattr(other, field)
+        if (
+            isinstance(representative, CertificationItem)
+            and representative.grade is None
+        ):
+            update["grade"] = other.grade
+        merged[match_index] = representative.model_copy(update=update)
+    return merged
+
+
+def _same_credential_identity(
+    current: AwardItem | CertificationItem,
+    incoming: AwardItem | CertificationItem,
+) -> bool:
+    if current.entity_id == incoming.entity_id:
+        return True
+    if not similar_title(current.title, incoming.title):
+        return False
+    if current.date and incoming.date and current.date != incoming.date:
+        return False
+    if current.issuer and incoming.issuer and not similar_title(
+        current.issuer, incoming.issuer
+    ):
+        return False
+    return True
+
+
+def _representative_credential(
+    current: AwardItem | CertificationItem,
+    incoming: AwardItem | CertificationItem,
+) -> tuple[AwardItem | CertificationItem, AwardItem | CertificationItem]:
+    current_score = sum(
+        bool(getattr(current, field, None)) for field in ("issuer", "date", "grade")
+    )
+    incoming_score = sum(
+        bool(getattr(incoming, field, None)) for field in ("issuer", "date", "grade")
+    )
+    return (incoming, current) if incoming_score > current_score else (current, incoming)
+
+
 def _normalize_work_items(
     items: list[WorkItem], graph: ActiveKnowledgeGraph
 ) -> list[WorkItem]:
@@ -407,6 +516,71 @@ def _normalize_work_items(
             )
         )
     return normalized
+
+
+def _deduplicate_work_items(
+    items: list[WorkItem], graph: ActiveKnowledgeGraph
+) -> list[WorkItem]:
+    """KG ID 우선, 제목·종류와 URL 근거가 일치하는 Work를 보조 병합한다"""
+    merged: list[WorkItem] = []
+    for item in items:
+        match_index = next(
+            (
+                index
+                for index, candidate in enumerate(merged)
+                if _same_work_identity(candidate, item, graph)
+            ),
+            None,
+        )
+        if match_index is None:
+            merged.append(item)
+            continue
+
+        current = merged[match_index]
+        representative, other = _representative_work(current, item)
+        same_entity = current.entity_id == item.entity_id
+        update = {
+            "description": _merge_descriptions(
+                representative.description, other.description
+            ),
+        }
+        if same_entity:
+            update["skills"] = (
+                list(dict.fromkeys((current.skills or []) + (item.skills or [])))
+                or None
+            )
+            links_by_href = {link.href: link for link in current.links + item.links}
+            update["links"] = list(links_by_href.values())
+            if representative.image_url is None:
+                update["image_url"] = other.image_url
+        merged[match_index] = representative.model_copy(update=update)
+    return merged
+
+
+def _same_work_identity(
+    current: WorkItem, incoming: WorkItem, graph: ActiveKnowledgeGraph
+) -> bool:
+    if current.entity_id == incoming.entity_id:
+        return True
+    if current.kind != incoming.kind or not similar_title(
+        current.title, incoming.title
+    ):
+        return False
+    current_urls = _work_urls(graph, current.entity_id)
+    incoming_urls = _work_urls(graph, incoming.entity_id)
+    return not (current_urls and incoming_urls and current_urls.isdisjoint(incoming_urls))
+
+
+def _work_urls(graph: ActiveKnowledgeGraph, entity_id: str) -> set[str]:
+    return fact_values(entity_facts(graph, UUID(entity_id)), "url")
+
+
+def _representative_work(
+    current: WorkItem, incoming: WorkItem
+) -> tuple[WorkItem, WorkItem]:
+    current_score = (bool(current.description), bool(current.role), len(current.title))
+    incoming_score = (bool(incoming.description), bool(incoming.role), len(incoming.title))
+    return (incoming, current) if incoming_score > current_score else (current, incoming)
 
 
 def _normalize_skill_categories(
