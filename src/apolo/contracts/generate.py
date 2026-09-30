@@ -220,13 +220,12 @@ CredentialDate = Annotated[
 
 
 class AwardItem(_ResponseModel):
-    """Awards 전용 항목"""
+    """Awards 전용 항목. description은 포함하지 않는다."""
 
     entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
     title: ShortText
     issuer: ShortText | None = None
     date: CredentialDate
-    description: LongText | None = None
 
     @model_serializer(mode="wrap")
     def serialize_with_required_date(self, nxt):
@@ -300,9 +299,9 @@ class WorksBlock(_ResponseModel):
 
 
 class SkillItem(_ResponseModel):
-    """Skills 전용 항목. KG Skill Entity와 표시 이름을 함께 보존한다"""
+    """Skills 표시 항목과 이를 구성하는 KG Skill Entity를 보존한다"""
 
-    entity_id: str = Field(min_length=1, pattern=r"\S", alias="entityId")
+    entity_ids: list[str] = Field(min_length=1, alias="entityIds")
     name: SkillText
 
 

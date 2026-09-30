@@ -6,4 +6,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .DS_Store
-tests
+tests/*
+!tests/test_entity_evidence.py
+!tests/test_graph_b_normalization.py

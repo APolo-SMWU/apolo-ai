@@ -220,16 +220,38 @@ def normalize_notion_blocks(
 
     lines = [f"# {title}"]
     evidence_candidates = [EvidenceCandidate(snippet=title, locator=f"notion.block:{root_id}")]
+    section_path: list[tuple[int, str]] = []
     for block_id, block in _walk_descendant_blocks(root_id, block_values):
         text = _block_plain_text(block)
         if not text:
             continue
-        line = _format_block_line(_block_type(block), text, block)
+        block_type = _block_type(block)
+        heading_level = _heading_level(block_type)
+        if heading_level is not None:
+            section_path = [
+                (level, heading)
+                for level, heading in section_path
+                if level < heading_level
+            ]
+            section_path.append((heading_level, text))
+
+        line = _format_block_line(block_type, text, block)
         if line is None:
             continue
+        section_names = [heading for _, heading in section_path]
+        section_suffix = (
+            f";section_path={' > '.join(section_names)}" if section_names else ""
+        )
+        # Keep the source text quote intact in EvidenceCandidate. The added marker records
+        # structural context from Notion's block order and makes context changes affect hash.
+        if heading_level is None and section_names:
+            line = f"[Notion section path: {' > '.join(section_names)}] {line}"
         lines.append(line)
         evidence_candidates.append(
-            EvidenceCandidate(snippet=text, locator=f"notion.block:{block_id}")
+            EvidenceCandidate(
+                snippet=text,
+                locator=f"notion.block:{block_id}{section_suffix}",
+            )
         )
 
     return CollectedSource(
@@ -871,6 +893,15 @@ def _format_block_line(block_type: str, text: str, block: Mapping[str, Any]) -> 
     if block_type in {"text", "callout"}:
         return text
     return None
+
+
+def _heading_level(block_type: str) -> int | None:
+    """Notion heading block의 계층 레벨"""
+    return {
+        "header": 2,
+        "sub_header": 3,
+        "sub_sub_header": 4,
+    }.get(block_type)
 
 
 def _todo_is_checked(block: Mapping[str, Any]) -> bool:

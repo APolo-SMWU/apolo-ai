@@ -53,12 +53,12 @@ class SourceSnapshot(BaseModel):
 
 
 class Evidence(BaseModel):
-    """Fact 또는 Relation을 뒷받침하는 원문 조각과 그 위치.
+    """Fact·Relation 또는 Work·Activity 설명 맥락을 뒷받침하는 원문 조각과 위치.
 
     snippet은 생성한 요약이 아닌 원문이며 공백·줄바꿈을 그대로 보존한다.
     locator는 README 섹션, Notion block ID 등 소스 내 위치다.
     문서 존재 여부와 원문 일치는 별도 검증 책임이다.
-    Fact/Relation과의 다대다 연결은 별도 연결 테이블에서 관리한다.
+    Fact·Relation·Entity와의 다대다 연결은 별도 연결 테이블에서 관리한다.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)

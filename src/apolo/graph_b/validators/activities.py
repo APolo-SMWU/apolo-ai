@@ -1,5 +1,7 @@
 """Activities block의 KG 근거 검증"""
 
+import re
+
 from apolo.contracts.generate import ActivityItem
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
 from apolo.graph_b.validation_types import ContentValidationIssue
@@ -84,14 +86,21 @@ def validate_activity_item(
             )
         )
 
-    if item.role is not None and item.role not in fact_values(facts, "role"):
-        issues.append(
-            ContentValidationIssue(
-                path=f"{item_path}.role",
-                code="ACTIVITY_ROLE_UNSUPPORTED",
-                message="Activities role이 KG의 근거와 일치하지 않습니다.",
-            )
+    if item.role is not None:
+        supported_roles = fact_values(facts, "role")
+        role_parts = _role_parts(item.role)
+        supported_role_parts = {part for role in supported_roles for part in _role_parts(role)}
+        role_is_supported = item.role in supported_roles or (
+            bool(role_parts) and set(role_parts).issubset(supported_role_parts)
         )
+        if not role_is_supported:
+            issues.append(
+                ContentValidationIssue(
+                    path=f"{item_path}.role",
+                    code="ACTIVITY_ROLE_UNSUPPORTED",
+                    message="Activities role이 KG의 근거와 일치하지 않습니다.",
+                )
+            )
 
     if item.kind is not None and item.kind not in fact_values(facts, "kind"):
         issues.append(
@@ -101,3 +110,7 @@ def validate_activity_item(
                 message="Activities kind가 KG의 근거와 일치하지 않습니다.",
             )
         )
+
+
+def _role_parts(role: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[,;\n]+", role) if part.strip()]

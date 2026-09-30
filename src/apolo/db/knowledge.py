@@ -1,5 +1,7 @@
 """Graph B가 사용할 현재 유효한 KG 조회."""
 
+from collections.abc import Collection
+
 import psycopg
 from psycopg.rows import tuple_row
 
@@ -7,19 +9,49 @@ from apolo.contracts.knowledge import ActiveKnowledgeGraph
 
 
 def load_active_knowledge_graph(
-    connection: psycopg.Connection, user_id: int
+    connection: psycopg.Connection,
+    user_id: int,
+    source_keys: Collection[str] | None = None,
 ) -> ActiveKnowledgeGraph | None:
     """사용자의 active KG를 조회하고 오래된 Source 근거를 제외한다.
 
-    프로필 provenance는 Evidence 없이 사용한다. Source provenance는 연결된 Evidence 중
-    하나라도 SourceDocument의 마지막 처리 해시와 일치할 때만 사용한다. 수집은 되었지만
-    아직 Graph A 분석이 끝나지 않은 최신 Snapshot은 기존 처리 결과를 무효화하지 않는다.
+    ``source_keys``가 주어지면 해당 요청에서 수집한 Source의 Evidence만 사용한다.
+    프로필 provenance는 Evidence 없이 사용한다. Source provenance는 연결된 Fact·Relation·Entity
+    Evidence 중 하나 이상이 SourceDocument의 마지막 처리 해시와 일치할 때만 사용한다.
+    수집은 되었지만 Graph A 분석이 끝나지 않은 최신 Snapshot은 기존 처리 결과를 무효화하지 않는다.
     연결과 트랜잭션의 종료는 호출부 책임이다.
     """
+    source_scope_sql = ""
+    params: tuple[object, ...]
+    if source_keys is None:
+        params = (user_id,)
+    else:
+        scoped_keys = sorted(set(source_keys))
+        source_scope_sql = " AND document.source_key = ANY(%s)"
+        params = (scoped_keys, scoped_keys, scoped_keys, user_id)
+
     with connection.cursor(row_factory=tuple_row) as cursor:
         cursor.execute(
-            """
-            WITH current_fact_evidence AS (
+            f"""
+            WITH current_entity_evidence AS (
+                SELECT
+                    link.entity_id,
+                    jsonb_agg(
+                        (to_jsonb(evidence) - 'graph_id') ORDER BY evidence.id
+                    ) AS items
+                FROM ai.entity_evidence link
+                JOIN ai.evidence evidence
+                  ON evidence.graph_id = link.graph_id
+                 AND evidence.id = link.evidence_id
+                JOIN ai.source_documents document
+                  ON document.graph_id = evidence.graph_id
+                 AND document.id = evidence.source_document_id
+                WHERE document.processed_content_hash IS NOT NULL
+                  AND evidence.source_content_hash = document.processed_content_hash
+                  {source_scope_sql}
+                GROUP BY link.entity_id
+            ),
+            current_fact_evidence AS (
                 SELECT
                     link.fact_id,
                     jsonb_agg(
@@ -34,6 +66,7 @@ def load_active_knowledge_graph(
                  AND document.id = evidence.source_document_id
                 WHERE document.processed_content_hash IS NOT NULL
                   AND evidence.source_content_hash = document.processed_content_hash
+                  {source_scope_sql}
                 GROUP BY link.fact_id
             ),
             current_relation_evidence AS (
@@ -51,6 +84,7 @@ def load_active_knowledge_graph(
                  AND document.id = evidence.source_document_id
                 WHERE document.processed_content_hash IS NOT NULL
                   AND evidence.source_content_hash = document.processed_content_hash
+                  {source_scope_sql}
                 GROUP BY link.relation_id
             )
             SELECT jsonb_build_object(
@@ -66,10 +100,17 @@ def load_active_knowledge_graph(
                         'graph_id', entity.graph_id,
                         'class_type', entity.class_type,
                         'status', entity.status,
+                        'evidence', CASE
+                            WHEN entity.class_type IN ('Work', 'Activity')
+                                THEN COALESCE(entity_evidence.items, '[]'::jsonb)
+                            ELSE '[]'::jsonb
+                        END,
                         'created_at', entity.created_at,
                         'updated_at', entity.updated_at
                     ) ORDER BY entity.id)
                     FROM ai.entities entity
+                    LEFT JOIN current_entity_evidence entity_evidence
+                        ON entity_evidence.entity_id = entity.id
                     WHERE entity.graph_id = graph.id
                       AND entity.status = 'active'
                 ), '[]'::jsonb),
@@ -147,7 +188,7 @@ def load_active_knowledge_graph(
             FROM ai.knowledge_graphs graph
             WHERE graph.user_id = %s
             """,
-            (user_id,),
+            params,
         )
         row = cursor.fetchone()
 

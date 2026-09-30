@@ -11,6 +11,7 @@ from psycopg.rows import tuple_row
 
 from apolo.contracts.extraction import ExtractionResult
 from apolo.contracts.source import CollectedSource
+from apolo.db.github_repository_links import link_github_repository_urls
 from apolo.db.graph_a import GraphASourceWrite, apply_source_extraction
 from apolo.source_collection import StoredPublicCollection
 
@@ -56,47 +57,68 @@ def process_pending_sources(
     writes: list[GraphASourceWrite] = []
     warnings: list[GraphAProcessingWarning] = []
     pending = collection.sources_needing_extraction()
-    if not pending:
-        return GraphAProcessingResult(tuple(writes), tuple(warnings))
-
-    worker_count = min(MAX_PARALLEL_EXTRACTIONS, len(pending))
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = [executor.submit(extractor.extract, source) for source, _ in pending]
-        for (source, stored), future in zip(pending, futures, strict=True):
-            try:
-                extraction = future.result()
-            except Exception:
-                warnings.append(
-                    GraphAProcessingWarning(
-                        source_key=source.source_key,
-                        code="extraction_failed",
-                        message="LLM 후보 추출에 실패했습니다.",
-                    )
-                )
-                continue
-
-            try:
-                with connection.transaction():
-                    expected_version = _lock_and_load_version(connection, graph_id)
-                    writes.append(
-                        apply_source_extraction(
-                            connection,
-                            graph_id,
-                            expected_version,
-                            source,
-                            stored,
-                            extraction,
-                            now=processed_at,
+    if pending:
+        worker_count = min(MAX_PARALLEL_EXTRACTIONS, len(pending))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [executor.submit(extractor.extract, source) for source, _ in pending]
+            for (source, stored), future in zip(pending, futures, strict=True):
+                try:
+                    extraction = future.result()
+                except Exception:
+                    warnings.append(
+                        GraphAProcessingWarning(
+                            source_key=source.source_key,
+                            code="extraction_failed",
+                            message="LLM 후보 추출에 실패했습니다.",
                         )
                     )
-            except Exception:
-                warnings.append(
-                    GraphAProcessingWarning(
-                        source_key=source.source_key,
-                        code="persistence_failed",
-                        message="후보 검증 또는 KG 저장에 실패했습니다.",
+                    continue
+
+                try:
+                    with connection.transaction():
+                        expected_version = _lock_and_load_version(connection, graph_id)
+                        writes.append(
+                            apply_source_extraction(
+                                connection,
+                                graph_id,
+                                expected_version,
+                                source,
+                                stored,
+                                extraction,
+                                now=processed_at,
+                            )
+                        )
+                except Exception:
+                    warnings.append(
+                        GraphAProcessingWarning(
+                            source_key=source.source_key,
+                            code="persistence_failed",
+                            message="후보 검증 또는 KG 저장에 실패했습니다.",
+                        )
                     )
-                )
+
+    github_links = link_github_repository_urls(
+        connection,
+        graph_id,
+        collection,
+        now=processed_at,
+    )
+    warnings.extend(
+        GraphAProcessingWarning(
+            source_key=source_key,
+            code="github_work_link_ambiguous",
+            message="저장소 Source에 연결된 Work가 여러 개라 GitHub URL을 추가하지 않았습니다.",
+        )
+        for source_key in github_links.ambiguous_source_keys
+    )
+    warnings.extend(
+        GraphAProcessingWarning(
+            source_key=source_key,
+            code="github_work_link_failed",
+            message="저장소 URL을 Work에 연결하지 못했습니다.",
+        )
+        for source_key in github_links.failed_source_keys
+    )
 
     return GraphAProcessingResult(tuple(writes), tuple(warnings))
 

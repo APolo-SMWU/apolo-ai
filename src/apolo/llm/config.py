@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 DEFAULT_EXTRACTION_MODEL = "gpt-5.6-luna"
-DEFAULT_EXTRACTION_TIMEOUT_SECONDS = 60.0
+DEFAULT_EXTRACTION_TIMEOUT_SECONDS = 240.0
 DEFAULT_LANGSMITH_PROJECT = "apolo-ai"
 
 

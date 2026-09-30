@@ -1,6 +1,7 @@
 """APolo AI 서버의 FastAPI 진입점."""
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
@@ -35,6 +36,14 @@ app = FastAPI(title="APolo AI")
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class GraphAResult:
+    """Graph A 경고와 이번 요청에서 실제 수집된 Source 범위"""
+
+    warnings: list[GenerateWarning]
+    source_keys: frozenset[str] = frozenset()
+
+
 @app.exception_handler(RequestValidationError)
 async def invalid_request(_request: Request, _error: RequestValidationError) -> JSONResponse:
     # 원본 입력에는 개인정보가 있으므로 오류 응답에 그대로 포함하지 않는다.
@@ -62,13 +71,17 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
                 source_urls.append(request.my_page_profile.github)
 
             warnings: list[GenerateWarning] = []
+            source_keys: frozenset[str] = frozenset()
             if source_urls:
-                warnings.extend(
-                    await _run_graph_a(connection, seed.id, source_urls)
-                )
+                graph_a_result = await _run_graph_a(connection, seed.id, source_urls)
+                warnings.extend(graph_a_result.warnings)
+                source_keys = graph_a_result.source_keys
 
             graph_b_result, graph_b_warnings = _run_graph_b(
-                connection, request.user_id, request.requirements
+                connection,
+                request.user_id,
+                request.requirements,
+                source_keys=source_keys,
             )
             warnings.extend(graph_b_warnings)
             if graph_b_result is not None:
@@ -106,9 +119,13 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
                     ],
                 )
 
-            warnings = await _run_graph_a(connection, seed.id, request.source_links)
+            graph_a_result = await _run_graph_a(connection, seed.id, request.source_links)
+            warnings = list(graph_a_result.warnings)
             graph_b_result, graph_b_warnings = _run_graph_b(
-                connection, request.user_id, request.requirements
+                connection,
+                request.user_id,
+                request.requirements,
+                source_keys=graph_a_result.source_keys,
             )
             warnings.extend(graph_b_warnings)
             if graph_b_result is not None:
@@ -133,8 +150,9 @@ async def _run_graph_a(
     connection,
     graph_id,
     source_urls: list[str],
-) -> list[GenerateWarning]:
+) -> GraphAResult:
     """공개 Source 수집과 Graph A 실행 결과를 API 경고로 변환"""
+    source_keys = frozenset()
     try:
         async with httpx.AsyncClient() as client:
             collection = await collect_and_store_public_sources(
@@ -143,8 +161,11 @@ async def _run_graph_a(
                 source_urls,
                 client=client,
             )
+        source_keys = frozenset(source.source_key for source in collection.collected_sources)
         if not collection.collected_sources:
-            return [_collection_warning(item) for item in collection.warnings]
+            return GraphAResult(
+                [_collection_warning(item) for item in collection.warnings], source_keys
+            )
         graph = build_graph_a()
         result = graph.invoke(
             {
@@ -161,16 +182,19 @@ async def _run_graph_a(
         )["result"]
     except Exception:
         logger.error("Graph A 처리 실패", exc_info=True)
-        return [
-            GenerateWarning(
-                code="SOURCE_PROCESSING_FAILED",
-                message="외부 Source 처리에 실패했습니다. 프로필 정보만 반환합니다.",
-            )
-        ]
+        return GraphAResult(
+            [
+                GenerateWarning(
+                    code="SOURCE_PROCESSING_FAILED",
+                    message="외부 Source 처리에 실패했습니다. 프로필 정보만 반환합니다.",
+                )
+            ],
+            source_keys,
+        )
 
     warnings = [_collection_warning(item) for item in collection.warnings]
     warnings.extend(_graph_warning(item) for item in result.warnings)
-    return warnings
+    return GraphAResult(warnings, source_keys)
 
 
 def _collection_warning(warning: PublicCollectionWarning) -> GenerateWarning:
@@ -187,10 +211,20 @@ def _run_graph_b(
     connection,
     user_id: int,
     requirements: str,
+    *,
+    source_keys: frozenset[str] | None = None,
 ) -> tuple[GraphBGenerationResult | None, list[GenerateWarning]]:
-    """최신 KG에서 Graph B를 실행하고 API 경고로 변환"""
+    """현재 요청 Source 범위의 KG에서 Graph B를 실행하고 API 경고로 변환"""
     try:
-        graph_b_input = load_graph_b_input(connection, user_id, requirements)
+        if source_keys is None:
+            graph_b_input = load_graph_b_input(connection, user_id, requirements)
+        else:
+            graph_b_input = load_graph_b_input(
+                connection,
+                user_id,
+                requirements,
+                source_keys=source_keys,
+            )
         if graph_b_input is None:
             return None, [
                 GenerateWarning(
