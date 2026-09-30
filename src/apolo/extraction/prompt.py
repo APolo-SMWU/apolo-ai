@@ -21,6 +21,52 @@ class ExtractionPrompt:
     user: str
 
 
+_SKILL_EXTRACTION_PROMPT = dedent(
+    """
+    ## Skill 카테고리
+    이 규칙은 Skill Entity나 Relation의 추출 여부를 바꾸지 않는다.
+    기존 기준대로 Work·Experience에서 실제 사용이 확인된 Skill과 usesSkill 관계를 추출한다.
+    이미 추출 대상인 Skill에 표시용 category fact를 추가할 수 있을 때만 분류한다.
+    category는 구체적인 언어·프레임워크·라이브러리·서비스·개발 도구에 부여한다.
+    모델명·분야명·알고리즘·연구 방법·응용 개념에는 category를 억지로 부여하지 않는다.
+    이들 항목이 기존 추출 기준을 충족한다면 Skill Entity와 Work·Experience.usesSkill은 유지한다.
+
+    category fact에는 아래 표준 이름 중 정확히 하나를 사용한다.
+    - 프로그래밍 언어: Python, TypeScript, SQL, R
+    - 프론트엔드·모바일: HTML/CSS, Android
+    - 백엔드·API: FastAPI, REST
+    - AI/ML 프레임워크·도구: PyTorch, Hugging Face Transformers, LangGraph, LangSmith, RAGAS
+    - 데이터·DB: PostgreSQL, FAISS, Azure AI Search
+    - 클라우드: Azure, AWS 등 클라우드 플랫폼
+    - 개발·분석 도구: GitHub, Tableau, n8n 등 구체적인 개발·분석 도구
+    기타는 구체적인 기술 도구임이 확인되지만 위 범주에 속하지 않을 때만 사용한다.
+    Azure PaaS·Azure Container Instances 등 Azure 서비스의 category는 '클라우드'다.
+    category 분류를 이유로 Skill.name이나 Skill 관계를 합치거나 바꾸지 않는다.
+
+    ## Skill 분류 예시
+    원문: "Tech Stack: Python, FastAPI, PostgreSQL, Azure Container Instances, PyTorch,
+    Hugging Face Transformers, GPT-4o, RAG, Medical AI, FGSM"
+    category fact를 부여할 예:
+    - Python / category=프로그래밍 언어
+    - FastAPI / category=백엔드·API
+    - PostgreSQL / category=데이터·DB
+    - Azure Container Instances / category=클라우드
+    - PyTorch / category=AI/ML 프레임워크·도구
+    - Hugging Face Transformers / category=AI/ML 프레임워크·도구
+    GPT-4o, RAG, Medical AI, FGSM에는 도구 category를 붙이지 않는다.
+    다만 이 예시가 Work의 Tech Stack에 속하면, 기존 추출 기준상 후보인 항목과
+    해당 Work의 usesSkill 관계는 category 유무와 관계없이 유지한다.
+
+    원문: "GraphRAG 응답 평가에 RAGAS 라이브러리와 MMR 재정렬 기법을 사용했고, 스크립트는 Python으로 작성했다."
+    category fact를 부여할 예:
+    - RAGAS / category=AI/ML 프레임워크·도구
+    - Python / category=프로그래밍 언어
+    GraphRAG와 MMR에는 도구 category를 붙이지 않는다. 기존 추출 기준상 후보라면
+    Work의 Skill Entity와 usesSkill 관계는 그대로 유지한다.
+    """
+).strip()
+
+
 def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
     """Source 하나를 ExtractionResult 후보 요청으로 변환"""
     allowed_properties = {
@@ -99,6 +145,7 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
         locator를 새로 만들거나 snippet, section path, 보조 문맥을 대신 넣지 않는다.
         """
     ).strip()
+    system = "\n\n".join([system, _SKILL_EXTRACTION_PROMPT])
 
     if source.source_type == "notion":
         system += "\n\n" + dedent(

@@ -415,25 +415,42 @@ def _normalize_skill_categories(
     supported = _supported_skills_by_category(graph)
     if not supported:
         return []
-    categories: dict[str, list[SkillItem]] = defaultdict(list)
+    categories: dict[str, dict[str, SkillItem]] = defaultdict(dict)
     for category in block.categories:
         category_name = _category_value(category.category, supported)
         if category_name is None:
             continue
         supported_items = supported[category_name]
-        seen_ids = {item.entity_id for item in categories[category_name]}
         for item in category.items:
-            if item.entity_id not in supported_items or item.entity_id in seen_ids:
+            member_ids: list[str] = []
+            for value in item.entity_ids:
+                parsed_id = item_entity_id(value)
+                canonical_id = str(parsed_id) if parsed_id is not None else None
+                if canonical_id in supported_items and canonical_id not in member_ids:
+                    member_ids.append(canonical_id)
+            if not member_ids or len(member_ids) != len(item.entity_ids):
                 continue
-            name = _required_value(item.name, supported_items[item.entity_id])
-            if name is None:
-                continue
-            categories[category_name].append(
-                item.model_copy(update={"name": name})
-            )
-            seen_ids.add(item.entity_id)
+            if len(member_ids) == 1:
+                candidate_names = supported_items[member_ids[0]]
+                name = item.name if item.name in candidate_names else sorted(candidate_names)[0]
+            else:
+                name = item.name
+            display_key = " ".join(name.split()).casefold()
+            existing = categories[category_name].get(display_key)
+            if existing is None:
+                categories[category_name][display_key] = item.model_copy(
+                    update={"entity_ids": member_ids, "name": name}
+                )
+            else:
+                merged_ids = list(dict.fromkeys([*existing.entity_ids, *member_ids]))
+                categories[category_name][display_key] = existing.model_copy(
+                    update={"entity_ids": merged_ids}
+                )
     return [
-        SkillCategory(category=category, items=items)
+        SkillCategory(
+            category=category,
+            items=list(items.values()),
+        )
         for category, items in categories.items()
         if items
     ]

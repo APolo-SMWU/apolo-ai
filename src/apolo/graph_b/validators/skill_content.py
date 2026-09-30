@@ -29,6 +29,7 @@ def validate_skill_content(
 
     supported_by_category = _supported_skills_by_category(graph)
     seen_items_by_category: dict[str, set[str]] = defaultdict(set)
+    seen_entity_ids_by_category: dict[str, set[str]] = defaultdict(set)
     for category_index, category in enumerate(block.categories):
         category_path = f"{block_path}.categories[{category_index}]"
         supported_items = supported_by_category.get(category.category)
@@ -51,18 +52,43 @@ def validate_skill_content(
             )
         for item_index, item in enumerate(category.items):
             item_path = f"{category_path}.items[{item_index}]"
-            skill_id = item_entity_id(item.entity_id)
-            skill_key = str(skill_id) if skill_id is not None else item.entity_id
-            supported_names = supported_items.get(skill_key, set())
-            if item.name not in supported_names:
+            parsed_ids = [item_entity_id(value) for value in item.entity_ids]
+            member_ids = [str(value) for value in parsed_ids if value is not None]
+            member_names = [supported_items.get(skill_id) for skill_id in member_ids]
+            if (
+                len(member_ids) != len(item.entity_ids)
+                or len(member_ids) != len(set(member_ids))
+                or any(names is None for names in member_names)
+            ):
                 issues.append(
                     ContentValidationIssue(
                         path=item_path,
                         code="SKILL_ITEM_UNSUPPORTED",
-                        message="Skills item이 KG 관계·category·name 근거와 일치하지 않습니다.",
+                        message="Skills item의 entityIds가 해당 category의 KG Skill 근거와 일치하지 않습니다.",
                     )
                 )
-            if skill_key in seen_items_by_category[category.category]:
+                continue
+            # 단일 항목은 실제 KG 이름을 사용하고, 그룹 대표명만 달라질 수 있다.
+            if len(member_ids) == 1 and item.name not in (member_names[0] or set()):
+                issues.append(
+                    ContentValidationIssue(
+                        path=f"{item_path}.name",
+                        code="SKILL_ITEM_UNSUPPORTED",
+                        message="개별 Skills 항목 이름은 KG Skill 이름과 일치해야 합니다.",
+                    )
+                )
+            repeated_ids = seen_entity_ids_by_category[category.category].intersection(member_ids)
+            if repeated_ids:
+                issues.append(
+                    ContentValidationIssue(
+                        path=f"{item_path}.entityIds",
+                        code="DUPLICATE_SKILL_ENTITY",
+                        message="같은 KG Skill을 Skills 블록의 여러 항목에 중복 연결할 수 없습니다.",
+                    )
+                )
+            seen_entity_ids_by_category[category.category].update(member_ids)
+            display_name = " ".join(item.name.split()).casefold()
+            if display_name in seen_items_by_category[category.category]:
                 issues.append(
                     ContentValidationIssue(
                         path=item_path,
@@ -70,7 +96,7 @@ def validate_skill_content(
                         message="같은 기술을 Skills 블록에서 중복 표시할 수 없습니다.",
                     )
                 )
-            seen_items_by_category[category.category].add(skill_key)
+            seen_items_by_category[category.category].add(display_name)
 
 
 def _supported_skills_by_category(graph: ActiveKnowledgeGraph) -> dict[str, dict[str, set[str]]]:
@@ -99,5 +125,6 @@ def _supported_skills_by_category(graph: ActiveKnowledgeGraph) -> dict[str, dict
             UNCATEGORIZED_SKILL_CATEGORY
         }
         for category in categories:
-            supported[category][str(skill_id)].update(names)
+            supported_names = supported[category][str(skill_id)]
+            supported_names.update(names)
     return {category: dict(skills) for category, skills in supported.items()}
