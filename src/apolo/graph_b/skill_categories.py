@@ -1,5 +1,6 @@
 """Skills 블록의 표준 카테고리와 이름 정규화 규칙."""
 
+import re
 import unicodedata
 from collections.abc import Iterable
 
@@ -287,3 +288,59 @@ def skill_display_category(name: str) -> str:
 
     categories = skill_categories_for_name(name)
     return categories[0] if categories else UNCATEGORIZED_SKILL_CATEGORY
+
+
+_NON_TOOL_KOREAN_TERMS = (
+    "크롤링",
+    "스크래핑",
+    "전처리",
+    "시각화",
+    "데이터 분석",
+    "컴퓨터 비전",
+    "자연어 처리",
+    "머신러닝",
+    "딥러닝",
+)
+_NON_TOOL_ENGLISH_TERMS = (
+    "web crawling",
+    "web scraping",
+    "preprocessing",
+    "data analysis",
+    "data visualization",
+    "natural language processing",
+    "computer vision",
+    "machine learning",
+    "deep learning",
+    "k-means",
+    "kmeans",
+    "yolo",
+    "crnn",
+    "fgsm",
+    "jsma",
+    "pgd",
+    "square attack",
+    "zoo attack",
+    "graphrag",
+    "rag",
+)
+
+
+def is_displayable_skill_name(name: str) -> bool:
+    """작업·주제·알고리즘 이름을 도구형 Skills 목록에서 제외한다."""
+
+    normalized = _normalize_name(name)
+    if not normalized or any(term in normalized for term in _NON_TOOL_KOREAN_TERMS):
+        return False
+    return not any(
+        re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", normalized)
+        for term in _NON_TOOL_ENGLISH_TERMS
+    )
+
+
+def is_azure_platform_skill(name: str) -> bool:
+    """Azure 플랫폼과 Azure 제품·서비스 이름인지 판별한다."""
+
+    normalized = _normalize_name(name)
+    return normalized in {"azure", "microsoft azure"} or normalized.startswith(
+        ("azure ", "microsoft azure ")
+    )
