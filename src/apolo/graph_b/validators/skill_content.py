@@ -1,12 +1,14 @@
-"""Skills block의 KG 근거 검증"""
+"""Skills block의 KG 근거와 카테고리 검증"""
 
 from collections import defaultdict
 
 from apolo.contracts.generate import SkillsBlock
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
 from apolo.graph_b.skill_categories import (
-    UNCATEGORIZED_SKILL_CATEGORY,
-    skill_display_category,
+    SKILL_CATEGORIES,
+    canonical_skill_name,
+    platform_group_representative,
+    skill_categories_for_name,
 )
 from apolo.graph_b.validation_types import ContentValidationIssue
 from apolo.graph_b.validators.common import item_entity_id
@@ -18,7 +20,7 @@ def validate_skill_content(
     graph: ActiveKnowledgeGraph,
     block_path: str,
 ) -> None:
-    """Skills category와 item이 연결된 Skill KG 근거와 일치하는지 검증한다"""
+    """카테고리·표준 기술명·entityIds가 KG 근거와 일치하는지 확인한다."""
 
     if not block.categories:
         issues.append(
@@ -31,20 +33,19 @@ def validate_skill_content(
         return
 
     supported_by_category = _supported_skills_by_category(graph)
-    seen_items_by_category: dict[str, set[str]] = defaultdict(set)
-    seen_entity_ids_by_category: dict[str, set[str]] = defaultdict(set)
+    seen_display_names: set[str] = set()
+    seen_entity_ids: set[str] = set()
     for category_index, category in enumerate(block.categories):
         category_path = f"{block_path}.categories[{category_index}]"
-        supported_items = supported_by_category.get(category.category)
-        if supported_items is None:
+        supported_items = supported_by_category.get(category.category, {})
+        if category.category not in SKILL_CATEGORIES:
             issues.append(
                 ContentValidationIssue(
                     path=f"{category_path}.category",
                     code="SKILL_CATEGORY_UNSUPPORTED",
-                    message="Skills category가 기술명 기반 표시 분류와 일치하지 않습니다.",
+                    message="Skills category가 표준 분류 목록에 없습니다.",
                 )
             )
-            supported_items = {}
         if not category.items:
             issues.append(
                 ContentValidationIssue(
@@ -53,6 +54,7 @@ def validate_skill_content(
                     message="기술 카테고리에는 기술이 하나 이상 있어야 합니다.",
                 )
             )
+
         for item_index, item in enumerate(category.items):
             item_path = f"{category_path}.items[{item_index}]"
             parsed_ids = [item_entity_id(value) for value in item.entity_ids]
@@ -67,43 +69,76 @@ def validate_skill_content(
                     ContentValidationIssue(
                         path=item_path,
                         code="SKILL_ITEM_UNSUPPORTED",
-                        message="Skills item의 entityIds가 해당 category의 KG Skill 근거와 일치하지 않습니다.",
+                        message=(
+                            "Skills item의 entityIds가 해당 category의 KG Skill 근거와 "
+                            "일치하지 않습니다."
+                        ),
                     )
                 )
                 continue
-            # 단일 항목은 실제 KG 이름을 사용하고, 그룹 대표명만 달라질 수 있다.
-            if len(member_ids) == 1 and item.name not in (member_names[0] or set()):
+
+            canonical_names_by_member = [
+                {canonical_skill_name(name) for name in names or set()} for names in member_names
+            ]
+            common_names = set.intersection(*canonical_names_by_member)
+            display_name = canonical_skill_name(item.name)
+            platform_name = platform_group_representative(member_names)
+            if display_name not in common_names and display_name != platform_name:
                 issues.append(
                     ContentValidationIssue(
                         path=f"{item_path}.name",
                         code="SKILL_ITEM_UNSUPPORTED",
-                        message="개별 Skills 항목 이름은 KG Skill 이름과 일치해야 합니다.",
+                        message="기술명은 연결된 KG Skill의 표준 이름이어야 합니다.",
                     )
                 )
-            repeated_ids = seen_entity_ids_by_category[category.category].intersection(member_ids)
+
+            category_options_by_member = [
+                {option for name in names or set() for option in skill_categories_for_name(name)}
+                for names in member_names
+            ]
+            if any(
+                options and category.category not in options
+                for options in category_options_by_member
+            ):
+                issues.append(
+                    ContentValidationIssue(
+                        path=f"{item_path}.category",
+                        code="SKILL_CATEGORY_UNSUPPORTED",
+                        message="기술 카테고리가 분류 사전과 일치하지 않습니다.",
+                    )
+                )
+
+            repeated_ids = seen_entity_ids.intersection(member_ids)
             if repeated_ids:
                 issues.append(
                     ContentValidationIssue(
                         path=f"{item_path}.entityIds",
                         code="DUPLICATE_SKILL_ENTITY",
-                        message="같은 KG Skill을 Skills 블록의 여러 항목에 중복 연결할 수 없습니다.",
+                        message="같은 KG Skill은 Skills 블록에 한 번만 표시할 수 있습니다.",
                     )
                 )
-            seen_entity_ids_by_category[category.category].update(member_ids)
-            display_name = " ".join(item.name.split()).casefold()
-            if display_name in seen_items_by_category[category.category]:
+            seen_entity_ids.update(member_ids)
+
+            display_key = " ".join(display_name.split()).casefold()
+            if display_key in seen_display_names:
                 issues.append(
                     ContentValidationIssue(
                         path=item_path,
                         code="DUPLICATE_SKILL_ITEM",
-                        message="같은 기술을 Skills 블록에서 중복 표시할 수 없습니다.",
+                        message="같은 기술은 카테고리와 관계없이 한 번만 표시할 수 있습니다.",
                     )
                 )
-            seen_items_by_category[category.category].add(display_name)
+            seen_display_names.add(display_key)
 
 
-def _supported_skills_by_category(graph: ActiveKnowledgeGraph) -> dict[str, dict[str, set[str]]]:
-    """Skills 블록에 포함 가능한 KG Skill을 표시용 분류별로 묶는다"""
+def _supported_skills_by_category(
+    graph: ActiveKnowledgeGraph,
+) -> dict[str, dict[str, set[str]]]:
+    """확인된 KG Skill ID와 이름을 가능한 표시 카테고리에 연결한다.
+
+    목록에 없는 기술도 모델이 근거와 사용 맥락으로 적절히 분류할 수 있도록
+    모든 표준 카테고리에서 검증 가능한 Skill로 취급한다.
+    """
 
     skill_ids = {entity.id for entity in graph.entities if entity.class_type == "Skill"}
     used_skill_ids = {
@@ -114,19 +149,18 @@ def _supported_skills_by_category(graph: ActiveKnowledgeGraph) -> dict[str, dict
     }
     names_by_skill: dict = defaultdict(set)
     for fact in graph.facts:
-        if fact.entity_id not in used_skill_ids or not isinstance(fact.value, str):
-            continue
-        if fact.predicate == "name":
+        if (
+            fact.entity_id in used_skill_ids
+            and fact.predicate == "name"
+            and isinstance(fact.value, str)
+        ):
             names_by_skill[fact.entity_id].add(fact.value)
 
     supported: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     for skill_id, names in names_by_skill.items():
-        categories = {skill_display_category(name) for name in names}
-        named_categories = categories - {UNCATEGORIZED_SKILL_CATEGORY}
-        category = (
-            next(iter(named_categories))
-            if len(named_categories) == 1
-            else UNCATEGORIZED_SKILL_CATEGORY
-        )
-        supported[category][str(skill_id)].update(names)
+        categories = {category for name in names for category in skill_categories_for_name(name)}
+        if not categories:
+            categories = set(SKILL_CATEGORIES)
+        for category in categories:
+            supported[category][str(skill_id)].update(names)
     return {category: dict(skills) for category, skills in supported.items()}

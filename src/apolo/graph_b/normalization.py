@@ -28,6 +28,13 @@ from apolo.contracts.generate import (
     WorksBlock,
 )
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
+from apolo.graph_b.skill_categories import (
+    SKILL_CATEGORIES,
+    UNCATEGORIZED_SKILL_CATEGORY,
+    canonical_skill_name,
+    platform_group_representative,
+    skill_categories_for_name,
+)
 from apolo.graph_b.validators.common import (
     date_values,
     entity_facts,
@@ -786,50 +793,121 @@ def _normalize_skill_categories(
     supported = _supported_skills_by_category(graph)
     if not supported:
         return []
-    category_by_skill_id = {
-        skill_id: category
-        for category, skills in supported.items()
-        for skill_id in skills
-    }
+    names_by_skill_id: dict[str, set[str]] = defaultdict(set)
+    for _category_name, skills in supported.items():
+        for skill_id, names in skills.items():
+            names_by_skill_id[skill_id].update(names)
+
     categories: dict[str, dict[str, SkillItem]] = defaultdict(dict)
-    for _category in block.categories:
-        for item in _category.items:
+    category_by_display_name: dict[str, str] = {}
+    display_name_by_entity_id: dict[str, str] = {}
+    for source_category in block.categories:
+        requested_category = source_category.category.strip()
+        for item in source_category.items:
             member_ids: list[str] = []
             for value in item.entity_ids:
                 parsed_id = item_entity_id(value)
                 canonical_id = str(parsed_id) if parsed_id is not None else None
-                if canonical_id in category_by_skill_id and canonical_id not in member_ids:
+                if canonical_id in names_by_skill_id and canonical_id not in member_ids:
                     member_ids.append(canonical_id)
             if not member_ids or len(member_ids) != len(item.entity_ids):
                 continue
 
-            member_categories = {category_by_skill_id[skill_id] for skill_id in member_ids}
-            if len(member_categories) != 1:
-                continue
-            category_name = member_categories.pop()
-            supported_items = supported[category_name]
-            if len(member_ids) == 1:
-                candidate_names = supported_items[member_ids[0]]
-                name = item.name if item.name in candidate_names else sorted(candidate_names)[0]
+            requested_name = canonical_skill_name(item.name)
+            grouped_ids: dict[str, list[str]] = defaultdict(list)
+            names_by_member = [
+                names_by_skill_id[skill_id] for skill_id in member_ids
+            ]
+            platform_name = platform_group_representative(names_by_member)
+            if (
+                platform_name is not None
+                and requested_name.casefold() == platform_name.casefold()
+            ):
+                grouped_ids[platform_name].extend(member_ids)
             else:
-                name = item.name
-            display_key = " ".join(name.split()).casefold()
-            existing = categories[category_name].get(display_key)
-            if existing is None:
-                categories[category_name][display_key] = item.model_copy(
-                    update={"entity_ids": member_ids, "name": name}
-                )
+                for skill_id in member_ids:
+                    candidate_names = {
+                        canonical_skill_name(name)
+                        for name in names_by_skill_id[skill_id]
+                    }
+                    if not candidate_names:
+                        continue
+                    # A group may contain synonymous KG entities. If it contains distinct
+                    # technologies and no shared platform representative, keep them separate.
+                    name = (
+                        requested_name
+                        if requested_name in candidate_names
+                        else sorted(candidate_names, key=str.casefold)[0]
+                    )
+                    grouped_ids[name].append(skill_id)
+
+            for name, grouped_member_ids in grouped_ids.items():
+                member_category_sets = [
+                    {
+                        category
+                        for member_name in names_by_skill_id[skill_id]
+                        for category in skill_categories_for_name(member_name)
+                    }
+                    for skill_id in grouped_member_ids
+                ]
+                known_category_sets = [
+                    values for values in member_category_sets if values
+                ]
+                if known_category_sets:
+                    valid_categories = set.intersection(*known_category_sets)
+                else:
+                    valid_categories = set()
+                if requested_category in SKILL_CATEGORIES and (
+                    not valid_categories or requested_category in valid_categories
+                ):
+                    category_name = requested_category
+                elif valid_categories:
+                    category_name = next(
+                        category
+                        for category in SKILL_CATEGORIES
+                        if category in valid_categories
+                    )
+                else:
+                    category_name = UNCATEGORIZED_SKILL_CATEGORY
+
+                display_key = " ".join(name.split()).casefold()
+                category_name = category_by_display_name.get(display_key, category_name)
+                existing = categories[category_name].get(display_key)
+                if existing is None:
+                    categories[category_name][display_key] = SkillItem(
+                        entity_ids=grouped_member_ids,
+                        name=name,
+                    )
+                else:
+                    merged_ids = list(
+                        dict.fromkeys([*existing.entity_ids, *grouped_member_ids])
+                    )
+                    categories[category_name][display_key] = existing.model_copy(
+                        update={"entity_ids": merged_ids}
+                    )
+                category_by_display_name[display_key] = category_name
+                for skill_id in grouped_member_ids:
+                    display_name_by_entity_id.setdefault(skill_id, display_key)
+
+    # 한 KG Skill은 한 번만 표시한다. 같은 entity가 다른 이름으로 중복 출력되면
+    # 먼저 확인된 표준 항목에 연결하고, 동의어 entity ID는 모두 보존한다.
+    for _category_name, items in categories.items():
+        for display_key, item in list(items.items()):
+            unique_ids = []
+            for skill_id in item.entity_ids:
+                if display_name_by_entity_id.get(skill_id) == display_key:
+                    unique_ids.append(skill_id)
+            if unique_ids:
+                items[display_key] = item.model_copy(update={"entity_ids": unique_ids})
             else:
-                merged_ids = list(dict.fromkeys([*existing.entity_ids, *member_ids]))
-                categories[category_name][display_key] = existing.model_copy(
-                    update={"entity_ids": merged_ids}
-                )
+                del items[display_key]
     return [
         SkillCategory(
             category=category,
             items=list(items.values()),
         )
-        for category, items in categories.items()
+        for category in SKILL_CATEGORIES
+        for items in [categories.get(category, {})]
         if items
     ]
 
