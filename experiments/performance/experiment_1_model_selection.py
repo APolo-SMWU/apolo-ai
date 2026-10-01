@@ -22,8 +22,8 @@ def main() -> int:
     parser.add_argument("--output-dir", default=settings.OUTPUT_DIR)
     args = parser.parse_args()
 
-    if args.repetitions < 3:
-        parser.error("repetitions는 최소 3이어야 합니다.")
+    if args.repetitions < 1:
+        parser.error("repetitions는 최소 1이어야 합니다.")
     model_ids = [args.model] if args.model else list(settings.MODEL_IDS)
     endpoints = {model: settings.MODEL_ENDPOINTS[model].rstrip("/") for model in model_ids}
     if len(set(endpoints.values())) != len(endpoints):
