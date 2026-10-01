@@ -7,6 +7,8 @@ from apolo.contracts.knowledge import ActiveKnowledgeGraph
 from apolo.graph_b.skill_categories import (
     SKILL_CATEGORIES,
     canonical_skill_name,
+    is_azure_platform_skill,
+    is_displayable_skill_name,
     platform_group_representative,
     skill_categories_for_name,
 )
@@ -83,7 +85,19 @@ def validate_skill_content(
             common_names = set.intersection(*canonical_names_by_member)
             display_name = canonical_skill_name(item.name)
             platform_name = platform_group_representative(member_names)
-            if display_name not in common_names and display_name != platform_name:
+            is_azure_group = (
+                display_name.casefold() == "azure"
+                and len(member_ids) > 1
+                and all(
+                    any(is_azure_platform_skill(name) for name in names or set())
+                    for names in member_names
+                )
+            )
+            if (
+                display_name not in common_names
+                and display_name != platform_name
+                and not is_azure_group
+            ):
                 issues.append(
                     ContentValidationIssue(
                         path=f"{item_path}.name",
@@ -153,11 +167,14 @@ def _supported_skills_by_category(
             fact.entity_id in used_skill_ids
             and fact.predicate == "name"
             and isinstance(fact.value, str)
+            and is_displayable_skill_name(fact.value)
         ):
             names_by_skill[fact.entity_id].add(fact.value)
 
     supported: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     for skill_id, names in names_by_skill.items():
+        if not names:
+            continue
         categories = {category for name in names for category in skill_categories_for_name(name)}
         if not categories:
             categories = set(SKILL_CATEGORIES)

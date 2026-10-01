@@ -32,6 +32,7 @@ from apolo.graph_b.skill_categories import (
     SKILL_CATEGORIES,
     UNCATEGORIZED_SKILL_CATEGORY,
     canonical_skill_name,
+    is_azure_platform_skill,
     platform_group_representative,
     skill_categories_for_name,
 )
@@ -888,6 +889,31 @@ def _normalize_skill_categories(
                 category_by_display_name[display_key] = category_name
                 for skill_id in grouped_member_ids:
                     display_name_by_entity_id.setdefault(skill_id, display_key)
+
+    # Azure 플랫폼과 서비스가 별도 Skill item으로 생성돼도 한 대표 항목으로 합친다.
+    cloud_category = "클라우드 & 배포"
+    azure_items = {}
+    azure_ids = []
+    for display_key, item in list(categories.get(cloud_category, {}).items()):
+        if all(
+            any(is_azure_platform_skill(name) for name in names_by_skill_id[skill_id])
+            for skill_id in item.entity_ids
+        ):
+            azure_items[display_key] = item
+            azure_ids.extend(item.entity_ids)
+    azure_ids = list(dict.fromkeys(azure_ids))
+    if len(azure_ids) > 1:
+        for display_key, item in azure_items.items():
+            del categories[cloud_category][display_key]
+            for skill_id in item.entity_ids:
+                display_name_by_entity_id.pop(skill_id, None)
+        categories[cloud_category]["azure"] = SkillItem(
+            entity_ids=azure_ids,
+            name="Azure",
+        )
+        category_by_display_name["azure"] = cloud_category
+        for skill_id in azure_ids:
+            display_name_by_entity_id[skill_id] = "azure"
 
     # 한 KG Skill은 한 번만 표시한다. 같은 entity가 다른 이름으로 중복 출력되면
     # 먼저 확인된 표준 항목에 연결하고, 동의어 entity ID는 모두 보존한다.
