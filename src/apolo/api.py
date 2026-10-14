@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -82,7 +83,9 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
                 warnings.extend(graph_a_result.warnings)
                 source_keys = graph_a_result.source_keys
 
-            graph_b_result, graph_b_warnings = _run_graph_b(
+            # LLM 호출 동안 다른 요청을 막지 않도록 스레드에서 실행
+            graph_b_result, graph_b_warnings = await run_in_threadpool(
+                _run_graph_b,
                 connection,
                 request.user_id,
                 request.requirements,
@@ -126,7 +129,8 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
 
             graph_a_result = await _run_graph_a(connection, seed.id, request.source_links)
             warnings = list(graph_a_result.warnings)
-            graph_b_result, graph_b_warnings = _run_graph_b(
+            graph_b_result, graph_b_warnings = await run_in_threadpool(
+                _run_graph_b,
                 connection,
                 request.user_id,
                 request.requirements,
@@ -223,7 +227,8 @@ async def _run_graph_a(
                 [_collection_warning(item) for item in collection.warnings], source_keys
             )
         graph = build_graph_a()
-        result = graph.invoke(
+        state = await run_in_threadpool(
+            graph.invoke,
             {
                 "connection": connection,
                 "graph_id": graph_id,
@@ -234,8 +239,9 @@ async def _run_graph_a(
                 ),
                 "now": datetime.now(UTC),
                 "result": None,
-            }
-        )["result"]
+            },
+        )
+        result = state["result"]
     except Exception:
         logger.error("Graph A 처리 실패", exc_info=True)
         return GraphAResult(
