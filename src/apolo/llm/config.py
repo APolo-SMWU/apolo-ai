@@ -10,6 +10,7 @@ DEFAULT_EXTRACTION_MODEL = "gpt-6-luna"
 DEFAULT_EXTRACTION_TIMEOUT_SECONDS = 240.0
 DEFAULT_CONTENT_TIMEOUT_SECONDS = 480.0
 DEFAULT_CV_TIMEOUT_SECONDS = 110.0
+DEFAULT_MAX_PARALLEL_EXTRACTIONS = 8
 DEFAULT_LANGSMITH_PROJECT = "apolo-ai"
 
 
@@ -22,6 +23,7 @@ class LlmSettings:
     extraction_timeout_seconds: float = DEFAULT_EXTRACTION_TIMEOUT_SECONDS
     content_timeout_seconds: float = DEFAULT_CONTENT_TIMEOUT_SECONDS
     cv_timeout_seconds: float = DEFAULT_CV_TIMEOUT_SECONDS
+    max_parallel_extractions: int = DEFAULT_MAX_PARALLEL_EXTRACTIONS
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,9 @@ def load_llm_settings() -> LlmSettings:
         ),
         cv_timeout_seconds=_positive_float_env(
             "APOLO_CV_TIMEOUT_SECONDS", DEFAULT_CV_TIMEOUT_SECONDS
+        ),
+        max_parallel_extractions=_positive_int_env(
+            "APOLO_MAX_PARALLEL_EXTRACTIONS", DEFAULT_MAX_PARALLEL_EXTRACTIONS
         ),
     )
 
@@ -77,3 +82,15 @@ def _positive_float_env(name: str, default: float) -> float:
     except ValueError:
         return default
     return parsed if math.isfinite(parsed) and parsed > 0 else default
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """양의 정수 환경 변수를 읽고 잘못된 값은 기본값으로 대체"""
+    value = _optional_env(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default

@@ -15,9 +15,9 @@ from apolo.contracts.extraction import ExtractionResult
 from apolo.contracts.source import CollectedSource
 from apolo.db.github_repository_links import link_github_repository_urls
 from apolo.db.graph_a import GraphASourceWrite, apply_source_extraction
+from apolo.llm.config import load_llm_settings
 from apolo.source_collection import StoredPublicCollection
 
-MAX_PARALLEL_EXTRACTIONS = 4
 logger = logging.getLogger(__name__)
 
 
@@ -61,7 +61,7 @@ def process_pending_sources(
     warnings: list[GraphAProcessingWarning] = []
     pending = collection.sources_needing_extraction()
     if pending:
-        worker_count = min(MAX_PARALLEL_EXTRACTIONS, len(pending))
+        worker_count = min(load_llm_settings().max_parallel_extractions, len(pending))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = [executor.submit(extractor.extract, source) for source, _ in pending]
             for (source, stored), future in zip(pending, futures, strict=True):
