@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 
 DEFAULT_EXTRACTION_MODEL = "gpt-5.6-luna"
 DEFAULT_EXTRACTION_TIMEOUT_SECONDS = 240.0
+# Backend 대기(/generate 300초, /generate-cv 120초)보다 먼저 끝나도록 잡는다
+DEFAULT_CONTENT_TIMEOUT_SECONDS = 180.0
+DEFAULT_CV_TIMEOUT_SECONDS = 110.0
 DEFAULT_LANGSMITH_PROJECT = "apolo-ai"
 
 
@@ -18,6 +21,8 @@ class LlmSettings:
     api_key: str | None
     extraction_model: str
     extraction_timeout_seconds: float = DEFAULT_EXTRACTION_TIMEOUT_SECONDS
+    content_timeout_seconds: float = DEFAULT_CONTENT_TIMEOUT_SECONDS
+    cv_timeout_seconds: float = DEFAULT_CV_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,12 @@ def load_llm_settings() -> LlmSettings:
         extraction_model=os.getenv("APOLO_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
         extraction_timeout_seconds=_positive_float_env(
             "APOLO_EXTRACTION_TIMEOUT_SECONDS", DEFAULT_EXTRACTION_TIMEOUT_SECONDS
+        ),
+        content_timeout_seconds=_positive_float_env(
+            "APOLO_CONTENT_TIMEOUT_SECONDS", DEFAULT_CONTENT_TIMEOUT_SECONDS
+        ),
+        cv_timeout_seconds=_positive_float_env(
+            "APOLO_CV_TIMEOUT_SECONDS", DEFAULT_CV_TIMEOUT_SECONDS
         ),
     )
 

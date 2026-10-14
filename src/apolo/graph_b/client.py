@@ -37,7 +37,11 @@ class OpenAIContentGenerationClient:
             self._responses = responses
             return
 
-        client = OpenAI(api_key=llm_settings.api_key)
+        client = OpenAI(
+            api_key=llm_settings.api_key,
+            timeout=llm_settings.content_timeout_seconds,
+            max_retries=0,
+        )
         if langsmith_settings.tracing_enabled:
             client = wrap_openai(client)
         self._responses = client.responses
