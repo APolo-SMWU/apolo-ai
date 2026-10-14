@@ -67,7 +67,10 @@ def process_pending_sources(
             for (source, stored), future in zip(pending, futures, strict=True):
                 try:
                     extraction = future.result()
-                except Exception:
+                except Exception as error:
+                    logger.warning(
+                        "Graph A 추출 실패 %s: %s", source.source_key, type(error).__name__
+                    )
                     warnings.append(
                         GraphAProcessingWarning(
                             source_key=source.source_key,
@@ -90,7 +93,10 @@ def process_pending_sources(
                             now=processed_at,
                         )
                         writes.append(write)
-                except Exception:
+                except Exception as error:
+                    logger.warning(
+                        "Graph A 저장 실패 %s: %s", source.source_key, type(error).__name__
+                    )
                     warnings.append(
                         GraphAProcessingWarning(
                             source_key=source.source_key,
