@@ -20,7 +20,7 @@ ExtractableClass = Literal[
 # MVP 추출 범위. 온톨로지에 있어도 여기 없는 속성·Relation은 제외한다.
 EXTRACTABLE_PROPERTIES: Final[dict[ExtractableClass, frozenset[str]]] = {
     "Work": frozenset({"title", "kind", "role", "start", "end", "url"}),
-    "Skill": frozenset({"name", "category"}),
+    "Skill": frozenset({"name", "kind", "category"}),
     "Experience": frozenset({"role", "department", "kind", "start", "end", "isCurrent"}),
     "Activity": frozenset({"name", "role", "kind", "start", "end", "isCurrent"}),
     "Education": frozenset({"major", "degree", "start", "end", "isCurrent"}),

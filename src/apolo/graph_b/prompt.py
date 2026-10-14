@@ -59,10 +59,10 @@ def build_content_generation_prompt(
 ) -> ContentGenerationPrompt:
     """선별된 KG와 요구사항을 콘텐츠 생성 요청으로 변환"""
     graph_payload = _compact_graph_payload(selection)
+    
+    content_classes = sorted(selection.selected_classes - {"Skill"})
     block_prompts = [
-        BLOCK_PROMPTS[class_type]
-        for class_type in sorted(selection.selected_classes)
-        if class_type in BLOCK_PROMPTS
+        BLOCK_PROMPTS[class_type] for class_type in content_classes if class_type in BLOCK_PROMPTS
     ]
     system = "\n\n".join([COMMON_PROMPT, ABOUT_PROMPT, *block_prompts])
     user = "\n\n".join(
@@ -70,7 +70,7 @@ def build_content_generation_prompt(
             "Graph B 출력 JSON Schema:\n"
             + json.dumps(graph_b_output_json_schema(), ensure_ascii=False, sort_keys=True),
             "선별된 콘텐츠 Entity 유형:\n"
-            + json.dumps(sorted(selection.selected_classes), ensure_ascii=False),
+            + json.dumps(content_classes, ensure_ascii=False),
             "사용자 요구사항:\n" + (requirements.strip() or "없음"),
             "선별된 현재 유효 KG(JSON):\n"
             + json.dumps(graph_payload, ensure_ascii=False, sort_keys=True),

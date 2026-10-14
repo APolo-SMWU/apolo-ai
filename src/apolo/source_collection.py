@@ -13,6 +13,7 @@ from apolo.collectors.public import (
 )
 from apolo.contracts.source import CollectedSource
 from apolo.db.source import PersistedCollectedSource, persist_collected_source
+from apolo.ontology.personal import ONTOLOGY_VERSION
 
 
 @dataclass(frozen=True)
@@ -34,9 +35,9 @@ class StoredPublicCollection:
                 or source.source_key != saved.snapshot.source_key
             ):
                 raise ValueError("수집 원문과 저장 상태의 Source 키가 일치해야 합니다.")
-            if (
-                saved.snapshot.fetch_status == "success"
-                and saved.snapshot.content_hash != saved.document.processed_content_hash
+            if saved.snapshot.fetch_status == "success" and (
+                saved.snapshot.content_hash != saved.document.processed_content_hash
+                or saved.document.processed_ontology_version != ONTOLOGY_VERSION
             ):
                 pending.append((source, saved))
         return pending

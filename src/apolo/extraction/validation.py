@@ -117,6 +117,15 @@ def validate_extraction(extraction: ExtractionResult) -> ExtractionValidation:
         item for item in entity_evidence if item.entity_ref not in unidentified
     ]
 
+    with_kind = {fact.entity_ref for fact in facts + uncertain if fact.predicate == "kind"}
+    for index, entity in enumerate(extraction.entities):
+        if (
+            entity.class_type == "Skill"
+            and entity.ref in entities
+            and entity.ref not in with_kind
+        ):
+            report("MISSING_SKILL_KIND", f"entities[{index}]", "Skill kind가 없습니다.")
+
     result = ExtractionResult(
         entities=list(entities.values()),
         facts=facts,

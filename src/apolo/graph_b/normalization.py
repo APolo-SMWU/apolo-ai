@@ -2,7 +2,6 @@
 
 import re
 import unicodedata
-from collections import defaultdict
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -21,21 +20,10 @@ from apolo.contracts.generate import (
     ExperienceBlock,
     ExperienceItem,
     ProjectLink,
-    SkillCategory,
-    SkillItem,
-    SkillsBlock,
     WorkItem,
     WorksBlock,
 )
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
-from apolo.graph_b.skill_categories import (
-    SKILL_CATEGORIES,
-    UNCATEGORIZED_SKILL_CATEGORY,
-    canonical_skill_name,
-    is_azure_platform_skill,
-    platform_group_representative,
-    skill_categories_for_name,
-)
 from apolo.graph_b.validators.common import (
     date_values,
     entity_facts,
@@ -44,7 +32,6 @@ from apolo.graph_b.validators.common import (
     item_entity_id,
     organization_names,
 )
-from apolo.graph_b.validators.skill_content import _supported_skills_by_category
 from apolo.text_similarity import shares_core_terms, similar_description, similar_title
 
 _BLOCK_RELATIONS = {
@@ -107,12 +94,6 @@ def normalize_graph_b_output(
             )
             if items:
                 normalized_blocks.append(block.model_copy(update={"items": items}))
-        elif isinstance(block, SkillsBlock):
-            categories = _normalize_skill_categories(block, graph)
-            if categories:
-                normalized_blocks.append(
-                    block.model_copy(update={"categories": categories})
-                )
 
     if not about_seen:
         normalized_blocks.insert(0, AboutBlock(description=""))
@@ -786,156 +767,6 @@ def _representative_work(
     current_score = (bool(current.description), bool(current.role), len(current.title))
     incoming_score = (bool(incoming.description), bool(incoming.role), len(incoming.title))
     return (incoming, current) if incoming_score > current_score else (current, incoming)
-
-
-def _normalize_skill_categories(
-    block: SkillsBlock, graph: ActiveKnowledgeGraph
-) -> list[SkillCategory]:
-    supported = _supported_skills_by_category(graph)
-    if not supported:
-        return []
-    names_by_skill_id: dict[str, set[str]] = defaultdict(set)
-    for _category_name, skills in supported.items():
-        for skill_id, names in skills.items():
-            names_by_skill_id[skill_id].update(names)
-
-    categories: dict[str, dict[str, SkillItem]] = defaultdict(dict)
-    category_by_display_name: dict[str, str] = {}
-    display_name_by_entity_id: dict[str, str] = {}
-    for source_category in block.categories:
-        requested_category = source_category.category.strip()
-        for item in source_category.items:
-            member_ids: list[str] = []
-            for value in item.entity_ids:
-                parsed_id = item_entity_id(value)
-                canonical_id = str(parsed_id) if parsed_id is not None else None
-                if canonical_id in names_by_skill_id and canonical_id not in member_ids:
-                    member_ids.append(canonical_id)
-            if not member_ids or len(member_ids) != len(item.entity_ids):
-                continue
-
-            requested_name = canonical_skill_name(item.name)
-            grouped_ids: dict[str, list[str]] = defaultdict(list)
-            names_by_member = [
-                names_by_skill_id[skill_id] for skill_id in member_ids
-            ]
-            platform_name = platform_group_representative(names_by_member)
-            if (
-                platform_name is not None
-                and requested_name.casefold() == platform_name.casefold()
-            ):
-                grouped_ids[platform_name].extend(member_ids)
-            else:
-                for skill_id in member_ids:
-                    candidate_names = {
-                        canonical_skill_name(name)
-                        for name in names_by_skill_id[skill_id]
-                    }
-                    if not candidate_names:
-                        continue
-                    # A group may contain synonymous KG entities. If it contains distinct
-                    # technologies and no shared platform representative, keep them separate.
-                    name = (
-                        requested_name
-                        if requested_name in candidate_names
-                        else sorted(candidate_names, key=str.casefold)[0]
-                    )
-                    grouped_ids[name].append(skill_id)
-
-            for name, grouped_member_ids in grouped_ids.items():
-                member_category_sets = [
-                    {
-                        category
-                        for member_name in names_by_skill_id[skill_id]
-                        for category in skill_categories_for_name(member_name)
-                    }
-                    for skill_id in grouped_member_ids
-                ]
-                known_category_sets = [
-                    values for values in member_category_sets if values
-                ]
-                if known_category_sets:
-                    valid_categories = set.intersection(*known_category_sets)
-                else:
-                    valid_categories = set()
-                if requested_category in SKILL_CATEGORIES and (
-                    not valid_categories or requested_category in valid_categories
-                ):
-                    category_name = requested_category
-                elif valid_categories:
-                    category_name = next(
-                        category
-                        for category in SKILL_CATEGORIES
-                        if category in valid_categories
-                    )
-                else:
-                    category_name = UNCATEGORIZED_SKILL_CATEGORY
-
-                display_key = " ".join(name.split()).casefold()
-                category_name = category_by_display_name.get(display_key, category_name)
-                existing = categories[category_name].get(display_key)
-                if existing is None:
-                    categories[category_name][display_key] = SkillItem(
-                        entity_ids=grouped_member_ids,
-                        name=name,
-                    )
-                else:
-                    merged_ids = list(
-                        dict.fromkeys([*existing.entity_ids, *grouped_member_ids])
-                    )
-                    categories[category_name][display_key] = existing.model_copy(
-                        update={"entity_ids": merged_ids}
-                    )
-                category_by_display_name[display_key] = category_name
-                for skill_id in grouped_member_ids:
-                    display_name_by_entity_id.setdefault(skill_id, display_key)
-
-    # Azure 플랫폼과 서비스가 별도 Skill item으로 생성돼도 한 대표 항목으로 합친다.
-    cloud_category = "클라우드 & 배포"
-    azure_items = {}
-    azure_ids = []
-    for display_key, item in list(categories.get(cloud_category, {}).items()):
-        if all(
-            any(is_azure_platform_skill(name) for name in names_by_skill_id[skill_id])
-            for skill_id in item.entity_ids
-        ):
-            azure_items[display_key] = item
-            azure_ids.extend(item.entity_ids)
-    azure_ids = list(dict.fromkeys(azure_ids))
-    if len(azure_ids) > 1:
-        for display_key, item in azure_items.items():
-            del categories[cloud_category][display_key]
-            for skill_id in item.entity_ids:
-                display_name_by_entity_id.pop(skill_id, None)
-        categories[cloud_category]["azure"] = SkillItem(
-            entity_ids=azure_ids,
-            name="Azure",
-        )
-        category_by_display_name["azure"] = cloud_category
-        for skill_id in azure_ids:
-            display_name_by_entity_id[skill_id] = "azure"
-
-    # 한 KG Skill은 한 번만 표시한다. 같은 entity가 다른 이름으로 중복 출력되면
-    # 먼저 확인된 표준 항목에 연결하고, 동의어 entity ID는 모두 보존한다.
-    for _category_name, items in categories.items():
-        for display_key, item in list(items.items()):
-            unique_ids = []
-            for skill_id in item.entity_ids:
-                if display_name_by_entity_id.get(skill_id) == display_key:
-                    unique_ids.append(skill_id)
-            if unique_ids:
-                items[display_key] = item.model_copy(update={"entity_ids": unique_ids})
-            else:
-                del items[display_key]
-    return [
-        SkillCategory(
-            category=category,
-            items=list(items.values()),
-        )
-        for category in SKILL_CATEGORIES
-        for items in [categories.get(category, {})]
-        if items
-    ]
 
 
 def _entity_context(

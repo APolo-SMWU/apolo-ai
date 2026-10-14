@@ -19,6 +19,7 @@ from apolo.extraction.evidence import matching_source_evidence, validate_source_
 from apolo.extraction.ownership import add_source_ownership_relations
 from apolo.extraction.resolution import EntityResolution
 from apolo.extraction.validation import ExtractionIssue, validate_extraction
+from apolo.ontology.personal import ONTOLOGY_VERSION
 
 
 @dataclass(frozen=True)
@@ -106,7 +107,10 @@ def _check_source_state(
     content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
     if content_hash != stored.snapshot.content_hash:
         raise ValueError("수집 원문과 저장된 Source 해시가 일치해야 합니다.")
-    if stored.document.processed_content_hash == stored.snapshot.content_hash:
+    if (
+        stored.document.processed_content_hash == stored.snapshot.content_hash
+        and stored.document.processed_ontology_version == ONTOLOGY_VERSION
+    ):
         raise ValueError("현재 원문 해시는 이미 Graph A에 반영되었습니다.")
 
 
@@ -188,7 +192,8 @@ def _mark_source_processed(
 ) -> None:
     """현재 Snapshot 해시를 실제 반영한 시점으로 기록"""
     cursor.execute(
-        "UPDATE ai.source_documents d SET processed_at=%s,processed_content_hash=%s "
+        "UPDATE ai.source_documents d SET processed_at=%s,processed_content_hash=%s,"
+        "processed_ontology_version=%s "
         "FROM ai.source_snapshots s "
         "WHERE d.id=%s AND d.graph_id=%s AND s.graph_id=d.graph_id "
         "AND s.source_key=d.source_key AND s.fetch_status='success' "
@@ -196,6 +201,7 @@ def _mark_source_processed(
         (
             now,
             stored.snapshot.content_hash,
+            ONTOLOGY_VERSION,
             stored.document.id,
             graph_id,
             stored.snapshot.content_hash,

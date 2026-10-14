@@ -5,7 +5,7 @@
 
 from typing import Final, Literal
 
-ONTOLOGY_VERSION: Final = "2.0"
+ONTOLOGY_VERSION: Final = "2.1"
 
 ClassType = Literal[
     "Person",
@@ -80,6 +80,7 @@ PROPERTY_TYPES: Final[dict[ClassType, dict[str, tuple[ValueType, ...]]]] = {
     },
     "Skill": {
         "name": ("string",),
+        "kind": ("string",),
         "category": ("string",),
     },
     "Organization": {
@@ -94,6 +95,53 @@ PROPERTY_TYPES: Final[dict[ClassType, dict[str, tuple[ValueType, ...]]]] = {
     },
 }
 
+# Skills 블록 그룹
+SKILL_CATEGORY_IDS: Final = (
+    "language",
+    "web_markup_styling",
+    "frontend",
+    "ui_component",
+    "backend",
+    "mobile",
+    "desktop",
+    "state_management",
+    "server_state_data_fetching",
+    "api_communication",
+    "database",
+    "orm_data_access",
+    "cache_search",
+    "messaging_event_streaming",
+    "auth_security",
+    "architecture_design",
+    "build_package_tool",
+    "dev_automation_tool",
+    "ci_cd",
+    "container_infra_automation",
+    "cloud_deployment",
+    "storage_cdn",
+    "os_server",
+    "network",
+    "testing_quality",
+    "monitoring_observability",
+    "data_collection_processing",
+    "data_pipeline",
+    "data_warehouse_lakehouse",
+    "data_analysis_bi",
+    "data_visualization",
+    "statistics_experiment",
+    "machine_learning",
+    "nlp_computer_vision",
+    "generative_ai_llm",
+    "vector_search",
+    "knowledge_graph_ontology",
+    "mlops_model_serving",
+    "design_prototyping",
+    "docs_collaboration",
+    "game_realtime_graphics",
+    "embedded_iot",
+    "other",
+)
+
 # (2) 값이 정해진 속성만 열거한다. 코드가 이 값으로 분기하거나 비교하는 속성이다.
 # 목록 밖 값은 비슷한 값으로 추측해 바꾸지 않는다. 검증에서 해당 Fact만 제외한다.
 PROPERTY_VALUES: Final[dict[tuple[ClassType, str], frozenset[str]]] = {
@@ -102,6 +150,8 @@ PROPERTY_VALUES: Final[dict[tuple[ClassType, str], frozenset[str]]] = {
     ("Activity", "kind"): frozenset({"club", "volunteer", "program", "talk"}),
     ("Work", "kind"): frozenset({"project", "publication", "opensource"}),
     ("Credential", "kind"): frozenset({"award", "certification"}),
+    ("Skill", "kind"): frozenset({"tool", "method", "model", "domain", "other"}),
+    ("Skill", "category"): frozenset(SKILL_CATEGORY_IDS),
     ("Organization", "type"): frozenset(
         {"company", "university", "club", "institution", "github_org"}
     ),

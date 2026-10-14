@@ -1,5 +1,7 @@
 """변경된 Source의 LLM 후보 추출과 KG 저장을 연결하는 Graph A 처리"""
 
+import logging
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,6 +18,7 @@ from apolo.db.graph_a import GraphASourceWrite, apply_source_extraction
 from apolo.source_collection import StoredPublicCollection
 
 MAX_PARALLEL_EXTRACTIONS = 4
+logger = logging.getLogger(__name__)
 
 
 class CandidateExtractor(Protocol):
@@ -77,17 +80,16 @@ def process_pending_sources(
                 try:
                     with connection.transaction():
                         expected_version = _lock_and_load_version(connection, graph_id)
-                        writes.append(
-                            apply_source_extraction(
-                                connection,
-                                graph_id,
-                                expected_version,
-                                source,
-                                stored,
-                                extraction,
-                                now=processed_at,
-                            )
+                        write = apply_source_extraction(
+                            connection,
+                            graph_id,
+                            expected_version,
+                            source,
+                            stored,
+                            extraction,
+                            now=processed_at,
                         )
+                        writes.append(write)
                 except Exception:
                     warnings.append(
                         GraphAProcessingWarning(
@@ -96,6 +98,15 @@ def process_pending_sources(
                             message="후보 검증 또는 KG 저장에 실패했습니다.",
                         )
                     )
+                else:
+                    if write.issues:
+                        # 추출 값에는 개인정보가 있을 수 있어 코드와 개수만 남긴다.
+                        counts = Counter(issue.code for issue in write.issues)
+                        logger.warning(
+                            "Graph A 검증 경고 %s: %s",
+                            source.source_key,
+                            ", ".join(f"{code}x{n}" for code, n in sorted(counts.items())),
+                        )
 
     github_links = link_github_repository_urls(
         connection,

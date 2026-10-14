@@ -13,6 +13,7 @@ class SourceDocument(BaseModel):
     URL 정규화와 수집 가능한 주소인지 확인하는 일은 Collector에서 처리한다.
     processed_at은 수집 시각이 아니라 분석 완료 시각이며, 분석 전에는 None이다.
     processed_content_hash는 그때 분석한 원문 해시다.
+    processed_ontology_version은 그때 적용한 온톨로지 버전이며, 다르면 다시 분석한다.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -24,6 +25,7 @@ class SourceDocument(BaseModel):
     source_url: str = Field(min_length=1, pattern=r"\S")
     processed_at: AwareDatetime | None = None
     processed_content_hash: str | None = Field(default=None, min_length=1, pattern=r"\S")
+    processed_ontology_version: str | None = Field(default=None, min_length=1, pattern=r"\S")
 
 
 class SourceSnapshot(BaseModel):

@@ -11,6 +11,7 @@ from apolo.contracts.extraction import (
 )
 from apolo.contracts.source import CollectedSource
 from apolo.ontology.personal import PROPERTY_VALUES, RELATION_PAIRS
+from apolo.ontology.skill_categories import SKILL_CATEGORY_CATALOG
 
 
 @dataclass(frozen=True)
@@ -21,50 +22,81 @@ class ExtractionPrompt:
     user: str
 
 
-_SKILL_EXTRACTION_PROMPT = dedent(
+_SKILL_CATEGORY_GUIDE = "\n".join(
+    f"- {category} ({label}): {examples}" if examples else f"- {category} ({label})"
+    for category, (label, examples) in SKILL_CATEGORY_CATALOG.items()
+)
+
+_SKILL_EXTRACTION_PROMPT = (
+    dedent(
+        """
+    ## Skill
+    Work·Experience에서 실제 사용이 확인되면 도구가 아니어도 Skill로 추출하고
+    usesSkill로 연결한다. kind와 category는 Skill의 추출 여부나 관계를 바꾸지 않는다.
+    다음은 Skill로 만들지 않는다. 단, 그룹 사전에 있는 이름은 Skill로 만든다.
+    - 라이브러리·프레임워크의 클래스·함수·훅·모듈·설정 이름. 해당 라이브러리 Skill 하나로 본다.
+      예: useEffect → React, DataFrame → pandas
+    - 데이터 형식(JSON, CSV, YAML, XML)과 언어 표준 라이브러리 모듈(os, datetime, collections)
+
+    ### kind
+    모든 Skill에 kind fact를 정확히 하나 붙인다.
+    - tool: 이름 그대로 설치·호출·작성하는 구체적인 기술. 언어, 쿼리 언어, 프레임워크,
+      라이브러리, 데이터베이스, 클라우드 서비스, 개발·협업 도구, API 규격·프로토콜·인증 표준.
+    - method: 따르는 기법·방법론·알고리즘·분석 방법·설계 방식.
+    - model: 이름이 있는 특정 학습 모델·체크포인트. 예: BERT, Llama 3, Whisper
+      알고리즘·아키텍처 종류(SVM, CNN, 결정 트리)는 model이 아니라 method다.
+    - domain: 분야·주제·응용 영역.
+    - other: 위 넷 중 어디에도 맞지 않을 때만 사용한다.
+    설치·호출·작성하는 대상이면 tool, 따르는 방식이면 method로 판단한다.
+    REST API, GraphQL, gRPC, OAuth 2.0, JWT처럼 구현하거나 호출하는 규격은 tool이다.
+    모델을 제공하는 API·SDK는 tool이고, 그것으로 호출한 특정 모델명은 model이다.
+    kind와 category fact의 evidence_refs에는 해당 Skill의 name fact와 같은 근거를 쓴다.
+
+    ### category
+    category 값은 아래 그룹 id만 사용한다. 표시 이름을 값으로 쓰지 않는다.
+    - kind=tool: category를 하나 이상 붙인다. 맞는 그룹이 없으면 other를 쓴다.
+    - kind=method, model, domain, other: category를 붙이지 않는다.
+    그룹 사전은 화이트리스트가 아니다. 사전에 없는 기술도 성격이 맞는 그룹에 넣는다.
+    사전에 같은 기술이 있으면 Skill.name은 사전의 표기를 쓴다.
+    예: Postgres → PostgreSQL, ReactJS → React, sklearn → scikit-learn.
+    버전 번호는 Skill.name에 붙이지 않는다. 숫자가 이름의 일부인 경우(ROS 2, OAuth 2.0)는 유지한다.
+    같은 Skill을 서로 다른 용도로 쓴 근거가 있을 때만 category를 여러 개 붙인다.
+    예: Selenium을 테스트와 데이터 수집에 모두 썼다면 testing_quality와 data_collection_processing.
+
+    그룹 사전 (id (표시 이름): 예시)
+    {category_guide}
+
+    ### 예시
+    원문: "Spring Boot와 JPA로 REST API를 만들고 JWT로 인증을 구현했다.
+    Redis로 세션을 캐싱하고 GitHub Actions로 배포를 자동화했다."
+    - Spring Boot / kind=tool / category=backend
+    - JPA / kind=tool / category=orm_data_access
+    - REST API / kind=tool / category=api_communication
+    - JWT / kind=tool / category=auth_security
+    - Redis / kind=tool / category=cache_search
+    - GitHub Actions / kind=tool / category=ci_cd
+
+    원문: "헬스케어 문서를 BERT로 분류하고 K-means로 군집을 나눴다.
+    추천 화면은 A/B 테스트로 검증했고, 스마트 컨트랙트는 Hardhat으로 테스트했다."
+    - BERT / kind=model / category 없음
+    - 헬스케어 / kind=domain / category 없음
+    - K-means / kind=method / category 없음
+    - A/B Testing / kind=method / category 없음
+    - Hardhat / kind=tool / category=other (맞는 그룹이 없는 도구)
+
+    원문: "ReactJS 18의 useEffect로 화면을 갱신하고 tailwindcss로 스타일을 입혔다.
+    Node v20 서버에서 postgres와 sklearn 모델을 연동했고 설정은 YAML로 관리했다."
+    - React / kind=tool / category=frontend (사전 표기, 버전 제외)
+    - Tailwind CSS / kind=tool / category=web_markup_styling
+    - Node.js / kind=tool / category=backend
+    - PostgreSQL / kind=tool / category=database
+    - scikit-learn / kind=tool / category=machine_learning
+    useEffect는 React의 구성요소이고 YAML은 데이터 형식이므로 Skill로 만들지 않는다.
     """
-    ## Skill 카테고리
-    이 규칙은 Skill Entity나 Relation의 추출 여부를 바꾸지 않는다.
-    기존 기준대로 Work·Experience에서 실제 사용이 확인된 Skill과 usesSkill 관계를 추출한다.
-    이미 추출 대상인 Skill에 표시용 category fact를 추가할 수 있을 때만 분류한다.
-    category는 구체적인 언어·프레임워크·라이브러리·서비스·개발 도구에 부여한다.
-    모델명·분야명·알고리즘·연구 방법·응용 개념에는 category를 억지로 부여하지 않는다.
-    이들 항목이 기존 추출 기준을 충족한다면 Skill Entity와 Work·Experience.usesSkill은 유지한다.
-
-    category fact에는 아래 표준 이름 중 정확히 하나를 사용한다.
-    - 프로그래밍 언어: Python, TypeScript, SQL, R
-    - 프론트엔드·모바일: HTML/CSS, Android
-    - 백엔드·API: FastAPI, REST
-    - AI/ML 프레임워크·도구: PyTorch, Hugging Face Transformers, LangGraph, LangSmith, RAGAS
-    - 데이터·DB: PostgreSQL, FAISS, Azure AI Search
-    - 클라우드: Azure, AWS 등 클라우드 플랫폼
-    - 개발·분석 도구: GitHub, Tableau, n8n 등 구체적인 개발·분석 도구
-    기타는 구체적인 기술 도구임이 확인되지만 위 범주에 속하지 않을 때만 사용한다.
-    Azure PaaS·Azure Container Instances 등 Azure 서비스의 category는 '클라우드'다.
-    category 분류를 이유로 Skill.name이나 Skill 관계를 합치거나 바꾸지 않는다.
-
-    ## Skill 분류 예시
-    원문: "Tech Stack: Python, FastAPI, PostgreSQL, Azure Container Instances, PyTorch,
-    Hugging Face Transformers, GPT-4o, RAG, Medical AI, FGSM"
-    category fact를 부여할 예:
-    - Python / category=프로그래밍 언어
-    - FastAPI / category=백엔드·API
-    - PostgreSQL / category=데이터·DB
-    - Azure Container Instances / category=클라우드
-    - PyTorch / category=AI/ML 프레임워크·도구
-    - Hugging Face Transformers / category=AI/ML 프레임워크·도구
-    GPT-4o, RAG, Medical AI, FGSM에는 도구 category를 붙이지 않는다.
-    다만 이 예시가 Work의 Tech Stack에 속하면, 기존 추출 기준상 후보인 항목과
-    해당 Work의 usesSkill 관계는 category 유무와 관계없이 유지한다.
-
-    원문: "GraphRAG 응답 평가에 RAGAS 라이브러리와 MMR 재정렬 기법을 사용했고, 스크립트는 Python으로 작성했다."
-    category fact를 부여할 예:
-    - RAGAS / category=AI/ML 프레임워크·도구
-    - Python / category=프로그래밍 언어
-    GraphRAG와 MMR에는 도구 category를 붙이지 않는다. 기존 추출 기준상 후보라면
-    Work의 Skill Entity와 usesSkill 관계는 그대로 유지한다.
-    """
-).strip()
+    )
+    .strip()
+    .replace("{category_guide}", _SKILL_CATEGORY_GUIDE)
+)
 
 
 def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:

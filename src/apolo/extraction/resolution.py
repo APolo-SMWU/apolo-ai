@@ -1,10 +1,13 @@
 """같은 사용자 KG 안에서 추출 Entity의 재사용 여부 판정"""
 
+import re
 from dataclasses import dataclass, field, replace
+from functools import cache
 from typing import Literal
 from uuid import UUID, uuid4
 
 from apolo.contracts.extraction import ExtractionResult
+from apolo.ontology.skill_categories import SKILL_CATEGORY_CATALOG
 from apolo.ontology.values import is_valid_value
 from apolo.text_similarity import similar_title
 
@@ -14,6 +17,10 @@ _STRONG_KEY_PROPERTIES: dict[tuple[str, str], StrongKeyType] = {
     ("Work", "url"): "work_url",
     ("Organization", "homepage"): "organization_homepage",
 }
+# 동일 skill 처리
+_PARENTHESIZED = re.compile(r"^\s*(.+?)\s*\(([^()]+)\)\s*$")
+_SPACED_VERSION = re.compile(r"^(.*\S)\s+v?\d+(?:\.\d+)*$", re.IGNORECASE)
+_ATTACHED_VERSION = re.compile(r"^(.*[A-Za-z+#])\d+(?:\.\d+)*$")
 
 
 @dataclass(frozen=True)
@@ -212,7 +219,9 @@ def _same_entity(candidate: ExistingEntity, stored: ExistingEntity) -> bool:
             and (by_homepage or by_name)
         )
     if kind == "Skill":
-        return _shared(candidate, stored, "name")
+        return _compatible(candidate, stored, "kind") and bool(
+            _skill_aliases(candidate) & _skill_aliases(stored)
+        )
     if kind == "Credential":
         return (
             _similar_fact(candidate, stored, "title")
@@ -256,10 +265,61 @@ def _same_entity(candidate: ExistingEntity, stored: ExistingEntity) -> bool:
     return False
 
 
-def _shared(left: ExistingEntity, right: ExistingEntity, predicate: str) -> bool:
-    left_values = {_normalized(value) for value in left.facts.get(predicate, ())}
-    right_values = {_normalized(value) for value in right.facts.get(predicate, ())}
-    return bool(left_values & right_values)
+def _skill_aliases(entity: ExistingEntity) -> set[str]:
+    """이름의 표기 차이를 지운 비교 키. 'Retrieval-Augmented Generation (RAG)'은 RAG도 포함"""
+    aliases = set()
+    is_tool = "tool" in {_normalized(value) for value in entity.facts.get("kind", ())}
+    for name in entity.facts.get("name", ()):
+        if not isinstance(name, str):
+            continue
+        aliases.add(_skill_key(name))
+        unversioned = _without_version(name) if is_tool else None
+        if unversioned is not None:
+            aliases.add(_skill_key(unversioned))
+        match = _PARENTHESIZED.match(name)
+        if match is None:
+            continue
+        outer, inner = match.group(1), match.group(2)
+        if _is_acronym(inner, outer) or _is_acronym(outer, inner):
+            aliases |= {_skill_key(outer), _skill_key(inner)}
+    aliases.discard("")
+    return aliases
+
+
+def _skill_key(name: str) -> str:
+    # C, C++, C#처럼 기호로만 구분되는 이름이 합쳐지지 않도록 기호를 먼저 글자로 바꾼다.
+    text = name.casefold().replace("+", "plus").replace("#", "sharp")
+    return re.sub(r"[\W_]+", "", text)
+
+
+def _without_version(name: str) -> str | None:
+    """버전을 뗀 이름. ROS 2처럼 사전에 있는 이름과 S3처럼 숫자가 이름인 경우는 떼지 않는다"""
+    catalog = _catalog_keys()
+    if _skill_key(name) in catalog:
+        return None
+    spaced = _SPACED_VERSION.match(name)
+    if spaced is not None:
+        return spaced.group(1)
+    attached = _ATTACHED_VERSION.match(name)
+    if attached is not None and _skill_key(attached.group(1)) in catalog:
+        return attached.group(1)
+    return None
+
+
+@cache
+def _catalog_keys() -> frozenset[str]:
+    return frozenset(
+        _skill_key(name)
+        for _, examples in SKILL_CATEGORY_CATALOG.values()
+        for name in examples.split(",")
+        if name.strip()
+    )
+
+
+def _is_acronym(short: str, long: str) -> bool:
+    words = [word for word in re.split(r"[\s\-_/]+", long) if word]
+    initials = "".join(word[0] for word in words)
+    return len(words) > 1 and short.strip().casefold() == initials.casefold()
 
 
 def _similar_fact(left: ExistingEntity, right: ExistingEntity, predicate: str) -> bool:
