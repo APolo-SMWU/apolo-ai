@@ -123,31 +123,3 @@ def save_evidence(
                 "VALUES (%s,%s,%s) ON CONFLICT (relation_id,evidence_id) DO NOTHING",
                 (graph_id, relation_id, evidence.id),
             )
-
-
-def load_fact_evidence(
-    connection: psycopg.Connection, graph_id: UUID, fact_id: UUID
-) -> list[Evidence]:
-    """해당 KG의 Fact 근거를 ID 순서로 조회한다. 대상·연결이 없으면 빈 목록이다."""
-    with connection.cursor(row_factory=tuple_row) as cursor:
-        cursor.execute(
-            "SELECT (to_jsonb(e)-'graph_id')::text FROM ai.evidence e "
-            "JOIN ai.fact_evidence l ON l.graph_id=e.graph_id AND l.evidence_id=e.id "
-            "WHERE l.graph_id=%s AND l.fact_id=%s ORDER BY e.id",
-            (graph_id, fact_id),
-        )
-        return [Evidence.model_validate_json(row[0]) for row in cursor.fetchall()]
-
-
-def load_relation_evidence(
-    connection: psycopg.Connection, graph_id: UUID, relation_id: UUID
-) -> list[Evidence]:
-    """해당 KG의 Relation 근거를 ID 순서로 조회한다. 대상·연결이 없으면 빈 목록이다."""
-    with connection.cursor(row_factory=tuple_row) as cursor:
-        cursor.execute(
-            "SELECT (to_jsonb(e)-'graph_id')::text FROM ai.evidence e "
-            "JOIN ai.relation_evidence l ON l.graph_id=e.graph_id AND l.evidence_id=e.id "
-            "WHERE l.graph_id=%s AND l.relation_id=%s ORDER BY e.id",
-            (graph_id, relation_id),
-        )
-        return [Evidence.model_validate_json(row[0]) for row in cursor.fetchall()]

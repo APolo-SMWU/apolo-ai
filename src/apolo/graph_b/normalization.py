@@ -32,7 +32,7 @@ from apolo.graph_b.validators.common import (
     item_entity_id,
     organization_names,
 )
-from apolo.text_similarity import shares_core_terms, similar_description, similar_title
+from apolo.text_similarity import shares_core_terms, similar_title
 
 _BLOCK_RELATIONS = {
     "education": ("Education", "hasEducation"),
@@ -605,7 +605,7 @@ def _work_url_label(href: str) -> str | None:
 def _deduplicate_work_items(
     items: list[WorkItem], graph: ActiveKnowledgeGraph
 ) -> list[WorkItem]:
-    """KG ID 우선, 제목·종류와 URL 근거가 일치하는 Work를 보조 병합한다"""
+    """같은 KG ID이거나 URL 근거가 겹치는 Work를 합친다"""
     merged: list[WorkItem] = []
     for item in items:
         match_index = next(
@@ -648,20 +648,8 @@ def _same_work_identity(
         return True
     if current.kind != incoming.kind:
         return False
-    current_urls = _work_urls(graph, current.entity_id)
-    incoming_urls = _work_urls(graph, incoming.entity_id)
-    shared_urls = current_urls & incoming_urls
-    if current_urls and incoming_urls and not shared_urls:
-        return False
-    if shared_urls:
-        return True
-    return (
-        similar_title(current.title, incoming.title)
-        or shares_core_terms(current.title, incoming.title)
-        or similar_description(current.description or "", incoming.description or "")
-        or similar_description(current.title, incoming.description or "")
-        or similar_description(incoming.title, current.description or "")
-    )
+    # 다른 Entity의 같은 프로젝트 여부는 Graph A 병합 판정이 정한다. 여기서는 URL만 본다.
+    return bool(_work_urls(graph, current.entity_id) & _work_urls(graph, incoming.entity_id))
 
 
 def _work_urls(graph: ActiveKnowledgeGraph, entity_id: str) -> set[str]:

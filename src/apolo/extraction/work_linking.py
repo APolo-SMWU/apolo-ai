@@ -119,12 +119,8 @@ def accepted_links(
     links: dict[str, UUID] = {}
     used: set[str] = set()
     for group in result.groups:
-        ids = list(dict.fromkeys(group.ids))
-        members = [by_id[i] for i in ids if i in by_id and i not in used]
-        if group.confidence < MIN_LINK_CONFIDENCE or len(members) < 2:
-            continue
-        families = {m.kind == "publication" for m in members if m.kind}
-        if len(families) > 1 or not _periods_overlap(members):
+        members = _valid_members(group, by_id, used)
+        if members is None:
             continue
         existing = [m.id for m in members if m.id in existing_ids]
         new = [m.id for m in members if m.id not in existing_ids]
@@ -135,6 +131,20 @@ def accepted_links(
         links.update({i: target for i in new})
         used.update(m.id for m in members)
     return links
+
+
+def _valid_members(
+    group: WorkLinkGroup, by_id: dict[str, WorkSummary], used: set[str]
+) -> list[WorkSummary] | None:
+    """기준선 미만, publication과 그 외가 섞인 묶음, 기간이 겹치지 않는 묶음은 버린다"""
+    ids = list(dict.fromkeys(group.ids))
+    members = [by_id[i] for i in ids if i in by_id and i not in used]
+    if group.confidence < MIN_LINK_CONFIDENCE or len(members) < 2:
+        return None
+    families = {m.kind == "publication" for m in members if m.kind}
+    if len(families) > 1 or not _periods_overlap(members):
+        return None
+    return members
 
 
 def _first(facts: dict[str, list[str]], predicate: str) -> str | None:
