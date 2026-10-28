@@ -17,6 +17,7 @@ from apolo.db.github_repository_links import link_github_repository_urls
 from apolo.db.graph_a import GraphASourceWrite, apply_source_extraction
 from apolo.db.resolution import load_work_summaries
 from apolo.db.source import PersistedCollectedSource
+from apolo.extraction.chunking import merge_extractions, split_source
 from apolo.extraction.work_linking import WorkLinker, accepted_links, new_work_summaries
 from apolo.llm.config import load_llm_settings
 from apolo.source_collection import StoredPublicCollection
@@ -65,15 +66,22 @@ def process_pending_sources(
     warnings: list[GraphAProcessingWarning] = []
     pending = collection.sources_needing_extraction()
     if pending:
-        worker_count = min(load_llm_settings().max_parallel_extractions, len(pending))
+        chunks = [split_source(source) for source, _ in pending]
+        worker_count = min(
+            load_llm_settings().max_parallel_extractions, sum(len(parts) for parts in chunks)
+        )
         extracted: list[
             tuple[int, CollectedSource, PersistedCollectedSource, ExtractionResult]
         ] = []
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = [executor.submit(extractor.extract, source) for source, _ in pending]
-            for index, ((source, stored), future) in enumerate(zip(pending, futures, strict=True)):
+            futures = [
+                [executor.submit(extractor.extract, part) for part in parts] for parts in chunks
+            ]
+            for index, ((source, stored), parts) in enumerate(zip(pending, futures, strict=True)):
                 try:
-                    extracted.append((index, source, stored, future.result()))
+                    # 조각 하나라도 실패하면 Source 전체를 실패로 둔다
+                    extraction = merge_extractions([future.result() for future in parts])
+                    extracted.append((index, source, stored, extraction))
                 except Exception as error:
                     logger.warning(
                         "Graph A 추출 실패 %s: %s", source.source_key, type(error).__name__
