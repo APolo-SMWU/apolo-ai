@@ -216,13 +216,13 @@ def normalize_notion_blocks(
     """전체 블록의 제목·텍스트를 Source·Evidence 후보로 변환"""
     block_values = _block_values_by_id(blocks)
     root_id, root = _root_page_block(target, block_values)
-    title = _block_plain_text(root) or "Untitled Notion Page"
+    title = _block_plain_text(root, block_values) or "Untitled Notion Page"
 
     lines = [f"# {title}"]
     evidence_candidates = [EvidenceCandidate(snippet=title, locator=f"notion.block:{root_id}")]
     section_path: list[tuple[int, str]] = []
     for block_id, block in _walk_descendant_blocks(root_id, block_values):
-        text = _block_plain_text(block)
+        text = _block_plain_text(block, block_values)
         if not text:
             continue
         block_type = _block_type(block)
@@ -856,8 +856,13 @@ def _block_type(block: Mapping[str, Any]) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _block_plain_text(block: Mapping[str, Any]) -> str:
-    """블록 title 조각의 일반 텍스트 결합"""
+def _block_plain_text(
+    block: Mapping[str, Any], records: Mapping[str, tuple[str, Mapping[str, Any]]] | None = None
+) -> str:
+    """블록 title 조각의 일반 텍스트 결합
+
+    records가 있으면 링크 멘션(‣)은 원본 주소로 바꾸고, 링크가 걸린 글자 뒤에는 주소를 붙인다.
+    """
     properties = block.get("properties")
     title = properties.get("title") if isinstance(properties, Mapping) else None
     if not isinstance(title, list):
@@ -865,9 +870,35 @@ def _block_plain_text(block: Mapping[str, Any]) -> str:
 
     parts: list[str] = []
     for fragment in title:
-        if isinstance(fragment, list) and fragment and isinstance(fragment[0], str):
-            parts.append(fragment[0])
+        if not (isinstance(fragment, list) and fragment and isinstance(fragment[0], str)):
+            continue
+        text = fragment[0]
+        url = _fragment_url(fragment, records) if records is not None else None
+        if url and url not in text:
+            text = url if text.strip() == "‣" else f"{text} ({url})"
+        parts.append(text)
     return "".join(parts).strip()
+
+
+def _fragment_url(
+    fragment: list[Any], records: Mapping[str, tuple[str, Mapping[str, Any]]]
+) -> str | None:
+    """글자 링크(a)나 링크 미리보기 멘션(eoi)의 http(s) 주소"""
+    annotations = fragment[1] if len(fragment) > 1 and isinstance(fragment[1], list) else []
+    for annotation in annotations:
+        if not isinstance(annotation, list) or len(annotation) < 2:
+            continue
+        kind, value = annotation[0], annotation[1]
+        url = None
+        if kind == "a":
+            url = value
+        elif kind == "eoi" and isinstance(value, str):
+            _, record = records.get(_normalized_block_id(value), ("", {}))
+            record_format = record.get("format")
+            url = record_format.get("original_url") if isinstance(record_format, Mapping) else None
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            return url
+    return None
 
 
 def _format_block_line(block_type: str, text: str, block: Mapping[str, Any]) -> str | None:
@@ -878,6 +909,8 @@ def _format_block_line(block_type: str, text: str, block: Mapping[str, Any]) -> 
         return f"### {text}"
     if block_type == "sub_sub_header":
         return f"#### {text}"
+    if block_type == "header_4":
+        return f"##### {text}"
     if block_type == "bulleted_list":
         return f"- {text}"
     if block_type == "numbered_list":
@@ -901,6 +934,7 @@ def _heading_level(block_type: str) -> int | None:
         "header": 2,
         "sub_header": 3,
         "sub_sub_header": 4,
+        "header_4": 5,
     }.get(block_type)
 
 

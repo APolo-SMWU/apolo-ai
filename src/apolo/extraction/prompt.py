@@ -161,6 +161,9 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
         - 본인·팀이 만든 결과물은 공개 저장소·팀 저장소 fork·라이선스 여부와 관계없이
           Work.kind=project로 분류한다. 저장소가 공개되어 있다는 것만으로 opensource가 아니다.
         - Work.kind 또는 본인 참여의 근거가 부족하면 해당 후보를 생략한다.
+        - Work.url에는 그 결과물에 직접 연결된 주소를 모두 넣는다.
+          예: 저장소, 배포 사이트, 데모, 발표자료·포스터, 논문, 시연 영상.
+          본인 프로필·SNS·이메일, 소속 단체 홈페이지는 Work.url이 아니다.
 
         ## Entity와 Relation
         Person Entity는 만들지 않고 원문 주인공은 예약 참조 'self'를 쓴다.
