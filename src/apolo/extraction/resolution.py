@@ -13,6 +13,9 @@ from apolo.text_similarity import similar_title
 
 StrongKeyType = Literal["work_url", "organization_homepage"]
 
+# 병합 판정(LLM)이 같은 Entity로 묶을 수 있는 클래스
+LINKED_CLASSES = frozenset({"Work", "Organization", "Activity", "Credential"})
+
 _STRONG_KEY_PROPERTIES: dict[tuple[str, str], StrongKeyType] = {
     ("Work", "url"): "work_url",
     ("Organization", "homepage"): "organization_homepage",
@@ -80,8 +83,9 @@ def resolve_existing_entities(
 ) -> EntityResolution:
     """한 사용자 KG의 기존 ID 재사용·새 ID 발급·모호한 후보 보류
 
-    forced_ids는 Work 병합 판정이 정한 ref → Work ID다. 규칙 비교보다 먼저 적용한다.
-    아직 없는 ID면 그 ID로 새 Work를 만들어 뒤따르는 Source가 같은 ID를 쓰게 한다.
+    forced_ids는 병합 판정이 정한 ref → Entity ID다. 규칙 비교보다 먼저 적용한다.
+    아직 없는 ID면 그 ID로 새 Entity를 만들어 뒤따르는 Source가 같은 ID를 쓰게 한다.
+    판정이 같다고 본 활동은 소속 기관이 정해지지 않아도 보류하지 않는다.
     """
     forced_ids = forced_ids or {}
     classes: dict[str, str] = {}
@@ -129,12 +133,11 @@ def resolve_existing_entities(
             facts=facts[ref],
             strong_keys=frozenset(strong_keys[ref]),
         )
+        forced_id = forced_ids.get(ref) if entity.class_type in LINKED_CLASSES else None
         if entity.class_type in {"Activity", "Education", "Experience"}:
             org_refs = affiliations[ref]
-            if any(org in ambiguous for org in org_refs):
-                ambiguous.append(ref)
-                continue
-            if len(org_refs) > 1 or any(org not in resolved_ids for org in org_refs):
+            unresolved = len(org_refs) > 1 or any(org not in resolved_ids for org in org_refs)
+            if unresolved and forced_id is None:
                 ambiguous.append(ref)
                 continue
             candidate = ExistingEntity(
@@ -153,7 +156,6 @@ def resolve_existing_entities(
                 pool.append(replace(candidate, id=entity_id))
                 continue
 
-        forced_id = forced_ids.get(ref) if entity.class_type == "Work" else None
         if forced_id is not None and not any(item.id == forced_id for item in pool):
             resolved_ids[ref] = forced_id
             new_ids[ref] = forced_id

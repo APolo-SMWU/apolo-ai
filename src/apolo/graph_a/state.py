@@ -6,7 +6,7 @@ from uuid import UUID
 
 import psycopg
 
-from apolo.extraction.work_linking import WorkLinker
+from apolo.extraction.entity_linking import Linker
 from apolo.graph_a.processing import CandidateExtractor, GraphAProcessingResult
 from apolo.source_collection import StoredPublicCollection
 
@@ -18,6 +18,6 @@ class GraphAState(TypedDict):
     graph_id: UUID
     collection: StoredPublicCollection
     extractor: CandidateExtractor
-    linker: NotRequired[WorkLinker | None]
+    linker: NotRequired[Linker | None]
     now: datetime | None
     result: GraphAProcessingResult | None

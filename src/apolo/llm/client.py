@@ -9,6 +9,11 @@ from pydantic import ValidationError
 
 from apolo.contracts.extraction import ExtractionResult, StructuredExtractionResult
 from apolo.contracts.source import CollectedSource
+from apolo.extraction.entity_linking import (
+    EntitySummary,
+    LinkedClass,
+    build_entity_linking_prompt,
+)
 from apolo.extraction.prompt import build_extraction_prompt
 from apolo.extraction.work_linking import (
     WorkLinkingResult,
@@ -82,7 +87,7 @@ class OpenAIExtractionClient:
 
 
 class OpenAIWorkLinkingClient:
-    """출처가 다른 같은 프로젝트 Work 묶음 판정"""
+    """출처가 다른 같은 프로젝트 Work와 같은 기관·활동·자격 묶음 판정"""
 
     def __init__(
         self,
@@ -111,7 +116,15 @@ class OpenAIWorkLinkingClient:
         self._responses = client.responses
 
     def link(self, works: list[WorkSummary]) -> WorkLinkingResult:
-        system, user = build_work_linking_prompt(works)
+        return self._judge(*build_work_linking_prompt(works))
+
+    def link_entities(
+        self, class_type: LinkedClass, summaries: list[EntitySummary]
+    ) -> WorkLinkingResult:
+        """기관·활동·자격 중 한 클래스의 같은 항목 묶음 판정"""
+        return self._judge(*build_entity_linking_prompt(class_type, summaries))
+
+    def _judge(self, system: str, user: str) -> WorkLinkingResult:
         response = self._responses.create(
             model=self._model,
             input=[
@@ -129,9 +142,9 @@ class OpenAIWorkLinkingClient:
         )
         output_text = getattr(response, "output_text", None)
         if not output_text:
-            raise ExtractionClientError("LLM이 Work 병합 판정 JSON을 반환하지 않았습니다.")
+            raise ExtractionClientError("LLM이 병합 판정 JSON을 반환하지 않았습니다.")
         try:
             return WorkLinkingResult.model_validate_json(output_text)
         except (ValidationError, json.JSONDecodeError) as error:
-            message = "LLM 응답이 Work 병합 판정 JSON 계약을 만족하지 않습니다."
+            message = "LLM 응답이 병합 판정 JSON 계약을 만족하지 않습니다."
             raise ExtractionClientError(message) from error

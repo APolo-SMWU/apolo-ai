@@ -8,6 +8,13 @@ from psycopg.pq import TransactionStatus
 from psycopg.rows import tuple_row
 
 from apolo.contracts.extraction import ExtractionResult
+from apolo.extraction.entity_linking import (
+    ID_PREFIX,
+    LINKED_ENTITY_CLASSES,
+    EntitySummary,
+    LinkedClass,
+    summary_from_facts,
+)
 from apolo.extraction.resolution import (
     EntityResolution,
     ExistingEntity,
@@ -151,6 +158,75 @@ def load_work_summaries(connection: psycopg.Connection, graph_id: UUID) -> dict[
             ),
             context=tuple(dict.fromkeys(c for c in contexts if c))[:3],
         )
+    return summaries
+
+
+def load_entity_summaries(
+    connection: psycopg.Connection, graph_id: UUID
+) -> dict[LinkedClass, dict[UUID, EntitySummary]]:
+    """병합 판정용 활성 기관·활동·자격 요약. id는 클래스별 O1·A1·C1 … 순서로 붙인다"""
+    with connection.cursor(row_factory=tuple_row) as cursor:
+        cursor.execute(
+            """
+            SELECT e.id, e.class_type,
+                COALESCE((
+                    SELECT jsonb_object_agg(p.predicate, p.vals) FROM (
+                        SELECT f.predicate, jsonb_agg(f.value) AS vals FROM ai.facts f
+                        WHERE f.entity_id=e.id AND f.status='active' GROUP BY f.predicate
+                    ) p
+                ), '{}'::jsonb),
+                COALESCE((
+                    SELECT jsonb_agg(s.class_type || ':' || label.value)
+                    FROM ai.relations r
+                    JOIN ai.entities s ON s.id=r.subject_entity_id AND s.status='active'
+                    -- 연결된 항목마다 이름 하나. 이름이 없는 경력은 역할을 쓴다
+                    CROSS JOIN LATERAL (
+                        SELECT sf.value #>> '{}' AS value FROM ai.facts sf
+                        WHERE sf.entity_id=s.id AND sf.status='active'
+                          AND sf.predicate IN ('name', 'title', 'role')
+                        ORDER BY sf.predicate='role', sf.updated_at LIMIT 1
+                    ) label
+                    WHERE r.graph_id=e.graph_id AND r.object_entity_id=e.id
+                      AND r.predicate='atOrganization' AND r.status='active'
+                ), '[]'::jsonb),
+                COALESCE((
+                    SELECT jsonb_agg(o.value #>> '{}') FROM ai.relations r
+                    JOIN ai.facts o ON o.entity_id=r.object_entity_id
+                     AND o.predicate='name' AND o.status='active'
+                    WHERE r.graph_id=e.graph_id AND r.subject_entity_id=e.id
+                      AND r.predicate='atOrganization' AND r.status='active'
+                ), '[]'::jsonb),
+                COALESCE((
+                    SELECT jsonb_agg(jsonb_build_array(ev.locator, ev.snippet))
+                    FROM ai.evidence ev
+                    WHERE ev.id IN (
+                        SELECT evidence_id FROM ai.entity_evidence WHERE entity_id=e.id
+                        UNION SELECT evidence_id FROM ai.fact_evidence WHERE entity_id=e.id
+                    )
+                ), '[]'::jsonb)
+            FROM ai.entities e
+            WHERE e.graph_id=%s AND e.status='active'
+              AND e.class_type IN ('Organization', 'Activity', 'Credential')
+            ORDER BY e.created_at, e.id
+            """,
+            (graph_id,),
+        )
+        rows = cursor.fetchall()
+
+    summaries: dict[LinkedClass, dict[UUID, EntitySummary]] = {
+        class_type: {} for class_type in LINKED_ENTITY_CLASSES
+    }
+    for entity_id, class_type, facts, linked, organizations, evidence in rows:
+        by_class = summaries[class_type]
+        summary = summary_from_facts(
+            f"{ID_PREFIX[class_type]}{len(by_class) + 1}",
+            class_type,
+            {p: [v for v in vals if isinstance(v, str)] for p, vals in facts.items()},
+            linked if class_type == "Organization" else organizations,
+            [(locator, snippet) for locator, snippet in evidence],
+        )
+        if summary is not None:
+            by_class[entity_id] = summary
     return summaries
 
 

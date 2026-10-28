@@ -2,9 +2,11 @@
 
 import logging
 from collections import Counter
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Protocol
 from uuid import UUID
 
@@ -15,10 +17,19 @@ from apolo.contracts.extraction import ExtractionResult
 from apolo.contracts.source import CollectedSource
 from apolo.db.github_repository_links import link_github_repository_urls
 from apolo.db.graph_a import GraphASourceWrite, apply_source_extraction
-from apolo.db.resolution import load_work_summaries
+from apolo.db.resolution import load_entity_summaries, load_work_summaries
 from apolo.db.source import PersistedCollectedSource
 from apolo.extraction.chunking import merge_extractions, split_source
-from apolo.extraction.work_linking import WorkLinker, accepted_links, new_work_summaries
+from apolo.extraction.entity_linking import (
+    LINKED_ENTITY_CLASSES,
+    MIN_ENTITY_LINK_CONFIDENCE,
+    EntitySummary,
+    LinkedClass,
+    Linker,
+    entities_compatible,
+    new_entity_summaries,
+)
+from apolo.extraction.work_linking import WorkSummary, accepted_links, new_work_summaries
 from apolo.llm.config import load_llm_settings
 from apolo.source_collection import StoredPublicCollection
 
@@ -55,9 +66,9 @@ def process_pending_sources(
     extractor: CandidateExtractor,
     *,
     now: datetime | None = None,
-    linker: WorkLinker | None = None,
+    linker: Linker | None = None,
 ) -> GraphAProcessingResult:
-    """변경 Source를 제한된 동시성으로 추출하고 Work 병합 판정 후 원래 순서대로 저장"""
+    """변경 Source를 제한된 동시성으로 추출하고 병합 판정 후 원래 순서대로 저장"""
     processed_at = now or datetime.now(UTC)
     if processed_at.tzinfo is None or processed_at.utcoffset() is None:
         raise ValueError("시간대가 있는 처리 시각이 필요합니다.")
@@ -94,7 +105,7 @@ def process_pending_sources(
                         )
                     )
 
-        links = _link_works(connection, graph_id, extracted, linker)
+        links = _link_entities(connection, graph_id, extracted, linker)
         for index, source, stored, extraction in extracted:
             forced_ids = {
                 ref: links[f"s{index}:{ref}"]
@@ -160,33 +171,86 @@ def process_pending_sources(
     return GraphAProcessingResult(tuple(writes), tuple(warnings))
 
 
-def _link_works(
+def _link_entities(
     connection: psycopg.Connection,
     graph_id: UUID,
     extracted: list[tuple[int, CollectedSource, PersistedCollectedSource, ExtractionResult]],
-    linker: WorkLinker | None,
+    linker: Linker | None,
 ) -> dict[str, UUID]:
-    """새 Work 후보와 기존 Work를 한 번에 판정한다. 실패하면 규칙 병합만 쓴다"""
-    if linker is None:
+    """새 후보와 기존 Entity를 클래스별로 동시에 판정한다. 실패한 클래스는 규칙 병합만 쓴다"""
+    if linker is None or not extracted:
         return {}
-    new = [
+    try:
+        jobs = _linking_jobs(connection, graph_id, extracted, linker)
+    except Exception as error:
+        logger.warning("병합 판정 준비 실패: %s", type(error).__name__)
+        return {}
+    links: dict[str, UUID] = {}
+    if not jobs:
+        return links
+    with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        futures = {label: executor.submit(job) for label, job in jobs.items()}
+        for label, future in futures.items():
+            try:
+                links.update(future.result())
+            except Exception as error:
+                logger.warning("%s 병합 판정 실패: %s", label, type(error).__name__)
+    return links
+
+
+def _linking_jobs(
+    connection: psycopg.Connection,
+    graph_id: UUID,
+    extracted: list[tuple[int, CollectedSource, PersistedCollectedSource, ExtractionResult]],
+    linker: Linker,
+) -> dict[str, Callable[[], dict[str, UUID]]]:
+    """DB 조회는 여기서 끝내고 LLM 판정만 클래스별 작업으로 넘긴다"""
+    jobs: dict[str, Callable[[], dict[str, UUID]]] = {}
+    new_works = [
         summary
         for index, source, _, extraction in extracted
         for summary in new_work_summaries(index, source, extraction).values()
     ]
-    if not new:
-        return {}
-    try:
-        existing = load_work_summaries(connection, graph_id)
-        works = [*existing.values(), *new]
-        if len(works) < 2:
-            return {}
-        result = linker.link(works)
-    except Exception as error:
-        logger.warning("Work 병합 판정 실패: %s", type(error).__name__)
-        return {}
-    existing_ids = {summary.id: entity_id for entity_id, summary in existing.items()}
-    return accepted_links(result, works, existing_ids)
+    if new_works:
+        existing_works = load_work_summaries(connection, graph_id)
+        works = [*existing_works.values(), *new_works]
+        if len(works) >= 2:
+            ids = {summary.id: entity_id for entity_id, summary in existing_works.items()}
+            jobs["Work"] = partial(_judge_works, linker, works, ids)
+
+    new_entities: dict[LinkedClass, list[EntitySummary]] = {c: [] for c in LINKED_ENTITY_CLASSES}
+    for index, source, _, extraction in extracted:
+        for class_type, by_ref in new_entity_summaries(index, source, extraction).items():
+            new_entities[class_type].extend(by_ref.values())
+    if any(new_entities.values()):
+        existing = load_entity_summaries(connection, graph_id)
+        for class_type, new in new_entities.items():
+            items = [*existing[class_type].values(), *new]
+            if new and len(items) >= 2:
+                ids = {s.id: entity_id for entity_id, s in existing[class_type].items()}
+                jobs[class_type] = partial(_judge_entities, linker, class_type, items, ids)
+    return jobs
+
+
+def _judge_works(
+    linker: Linker, works: list[WorkSummary], existing_ids: dict[str, UUID]
+) -> dict[str, UUID]:
+    return accepted_links(linker.link(works), works, existing_ids)
+
+
+def _judge_entities(
+    linker: Linker,
+    class_type: LinkedClass,
+    items: list[EntitySummary],
+    existing_ids: dict[str, UUID],
+) -> dict[str, UUID]:
+    return accepted_links(
+        linker.link_entities(class_type, items),
+        items,
+        existing_ids,
+        min_confidence=MIN_ENTITY_LINK_CONFIDENCE,
+        compatible=entities_compatible,
+    )
 
 
 def _lock_and_load_version(connection: psycopg.Connection, graph_id: UUID) -> int:

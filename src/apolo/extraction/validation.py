@@ -287,7 +287,7 @@ def _check_fact(
     allowed = PROPERTY_VALUES.get((entity.class_type, fact.predicate))
     value = fact.value
     if value_type == "date" and isinstance(value, str):
-        value = _normalize_date(value)
+        value = normalize_date(value)
     if allowed is not None and isinstance(value, str):
         # 값 목록이 있는 속성만 대소문자·공백 차이를 고친다.
         value = "_".join(value.lower().split())
@@ -300,7 +300,7 @@ def _check_fact(
     return fact.model_copy(update={"value": value})
 
 
-def _normalize_date(value: str) -> str:
+def normalize_date(value: str) -> str:
     """표기만 다른 날짜를 ISO로 맞춘다. 맞지 않으면 그대로 두어 형식 검사에서 제외된다."""
     match = _DATE_NOTATION.fullmatch(value.strip())
     if match is None:

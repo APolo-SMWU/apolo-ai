@@ -1,6 +1,7 @@
 """출처가 달라 제목·URL로 합쳐지지 않는 같은 프로젝트 Work를 LLM으로 판정"""
 
 import json
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from textwrap import dedent
 from typing import Protocol
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apolo.contracts.extraction import ExtractionResult
 from apolo.contracts.source import CollectedSource
+from apolo.extraction.validation import normalize_date
 
 MIN_LINK_CONFIDENCE = 0.85
 MAX_SNIPPET_CHARS = 200
@@ -88,8 +90,9 @@ def new_work_summaries(
             title=facts["title"][0],
             kind=_first(facts, "kind"),
             role=_first(facts, "role"),
-            start=_first(facts, "start"),
-            end=_first(facts, "end"),
+            # 판정은 검증보다 먼저라 날짜 표기(2024.12)를 검증과 같은 ISO 형식으로 맞춘다
+            start=_first_date(facts, "start"),
+            end=_first_date(facts, "end"),
             urls=tuple(facts.get("url", [])),
             skills=tuple(skills.get(entity.ref, [])[:5]),
             snippet=representative_snippet(
@@ -106,21 +109,33 @@ def new_work_summaries(
     return summaries
 
 
-def accepted_links(
-    result: WorkLinkingResult, works: list[WorkSummary], existing_ids: dict[str, UUID]
-) -> dict[str, UUID]:
-    """판정 묶음을 새 후보 id → Work ID로 바꾼다. 기존 Work가 없으면 새 ID를 함께 쓴다
+class _Summary(Protocol):
+    @property
+    def id(self) -> str: ...
 
-    LLM 판정이라도 publication과 그 외가 섞이거나 기간이 겹치지 않거나
-    기존 Work가 둘 이상인 묶음은 버린다. project와 opensource는 같은 계열로 본다.
+
+def accepted_links[S: _Summary](
+    result: WorkLinkingResult,
+    works: Sequence[S],
+    existing_ids: dict[str, UUID],
+    *,
+    min_confidence: float = MIN_LINK_CONFIDENCE,
+    compatible: Callable[[list[S]], bool] | None = None,
+) -> dict[str, UUID]:
+    """판정 묶음을 새 후보 id → Entity ID로 바꾼다. 기존 Entity가 없으면 새 ID를 함께 쓴다
+
+    LLM 판정이라도 기준선 미만이거나 compatible(기본: Work 규칙)을 어기거나
+    기존 Entity가 둘 이상인 묶음은 버린다.
     같은 Source의 후보가 한 묶음에 둘 이상이면 같은 ID로 두 번 만들지 않도록 버린다.
     """
+    check = compatible or _works_compatible
     by_id = {work.id: work for work in works}
     links: dict[str, UUID] = {}
     used: set[str] = set()
     for group in result.groups:
-        members = _valid_members(group, by_id, used)
-        if members is None:
+        ids = list(dict.fromkeys(group.ids))
+        members = [by_id[i] for i in ids if i in by_id and i not in used]
+        if group.confidence < min_confidence or len(members) < 2 or not check(members):
             continue
         existing = [m.id for m in members if m.id in existing_ids]
         new = [m.id for m in members if m.id not in existing_ids]
@@ -133,18 +148,13 @@ def accepted_links(
     return links
 
 
-def _valid_members(
-    group: WorkLinkGroup, by_id: dict[str, WorkSummary], used: set[str]
-) -> list[WorkSummary] | None:
-    """기준선 미만, publication과 그 외가 섞인 묶음, 기간이 겹치지 않는 묶음은 버린다"""
-    ids = list(dict.fromkeys(group.ids))
-    members = [by_id[i] for i in ids if i in by_id and i not in used]
-    if group.confidence < MIN_LINK_CONFIDENCE or len(members) < 2:
-        return None
+def _works_compatible(members: list[WorkSummary]) -> bool:
+    """publication과 그 외가 섞이거나 기간이 겹치지 않으면 다른 Work다.
+
+    project와 opensource는 같은 계열로 본다.
+    """
     families = {m.kind == "publication" for m in members if m.kind}
-    if len(families) > 1 or not _periods_overlap(members):
-        return None
-    return members
+    return len(families) <= 1 and periods_overlap(members)
 
 
 def _first(facts: dict[str, list[str]], predicate: str) -> str | None:
@@ -152,8 +162,20 @@ def _first(facts: dict[str, list[str]], predicate: str) -> str | None:
     return values[0] if values else None
 
 
-def _periods_overlap(works: list[WorkSummary]) -> bool:
-    """시작일이 있는 Work끼리만 비교한다. 끝이 없으면 진행 중으로 본다"""
+def _first_date(facts: dict[str, list[str]], predicate: str) -> str | None:
+    value = _first(facts, predicate)
+    return normalize_date(value) if value else None
+
+
+class _Dated(Protocol):
+    @property
+    def start(self) -> str | None: ...
+    @property
+    def end(self) -> str | None: ...
+
+
+def periods_overlap(works: Sequence[_Dated]) -> bool:
+    """시작일이 있는 것끼리만 비교한다. 끝이 없으면 진행 중으로 본다"""
     ranges = [(w.start, w.end or "9999") for w in works if w.start]
     return all(
         _not_after(a_start, b_end) and _not_after(b_start, a_end)
