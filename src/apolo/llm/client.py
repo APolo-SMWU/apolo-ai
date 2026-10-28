@@ -10,6 +10,11 @@ from pydantic import ValidationError
 from apolo.contracts.extraction import ExtractionResult, StructuredExtractionResult
 from apolo.contracts.source import CollectedSource
 from apolo.extraction.prompt import build_extraction_prompt
+from apolo.extraction.work_linking import (
+    WorkLinkingResult,
+    WorkSummary,
+    build_work_linking_prompt,
+)
 from apolo.llm.config import LangSmithSettings, LlmSettings
 
 
@@ -74,3 +79,59 @@ class OpenAIExtractionClient:
             message = "LLM 응답이 후보 추출 JSON 계약을 만족하지 않습니다."
             raise ExtractionClientError(message) from error
         return result.to_extraction_result()
+
+
+class OpenAIWorkLinkingClient:
+    """출처가 다른 같은 프로젝트 Work 묶음 판정"""
+
+    def __init__(
+        self,
+        llm_settings: LlmSettings,
+        langsmith_settings: LangSmithSettings,
+        *,
+        responses: Any | None = None,
+    ) -> None:
+        if not llm_settings.api_key:
+            raise ValueError("OPENAI_API_KEY가 설정되지 않았습니다.")
+        if langsmith_settings.tracing_enabled and not langsmith_settings.api_key:
+            raise ValueError("LangSmith tracing 활성화에는 LANGSMITH_API_KEY가 필요합니다.")
+
+        self._model = llm_settings.extraction_model
+        if responses is not None:
+            self._responses = responses
+            return
+
+        client = OpenAI(
+            api_key=llm_settings.api_key,
+            timeout=llm_settings.extraction_timeout_seconds,
+            max_retries=0,
+        )
+        if langsmith_settings.tracing_enabled:
+            client = wrap_openai(client)
+        self._responses = client.responses
+
+    def link(self, works: list[WorkSummary]) -> WorkLinkingResult:
+        system, user = build_work_linking_prompt(works)
+        response = self._responses.create(
+            model=self._model,
+            input=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "work_linking_result",
+                    "strict": True,
+                    "schema": WorkLinkingResult.model_json_schema(),
+                }
+            },
+        )
+        output_text = getattr(response, "output_text", None)
+        if not output_text:
+            raise ExtractionClientError("LLM이 Work 병합 판정 JSON을 반환하지 않았습니다.")
+        try:
+            return WorkLinkingResult.model_validate_json(output_text)
+        except (ValidationError, json.JSONDecodeError) as error:
+            message = "LLM 응답이 Work 병합 판정 JSON 계약을 만족하지 않습니다."
+            raise ExtractionClientError(message) from error

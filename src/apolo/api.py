@@ -33,7 +33,7 @@ from apolo.graph_a.workflow import build_graph_a
 from apolo.graph_b.client import OpenAIContentGenerationClient
 from apolo.graph_b.input import load_graph_b_input
 from apolo.graph_b.service import GraphBGenerationResult, generate_graph_b_content
-from apolo.llm.client import OpenAIExtractionClient
+from apolo.llm.client import OpenAIExtractionClient, OpenAIWorkLinkingClient
 from apolo.llm.config import load_langsmith_settings, load_llm_settings
 from apolo.ontology.personal import ONTOLOGY_VERSION
 from apolo.seed.persistence import ensure_profile_seed
@@ -238,6 +238,10 @@ async def _run_graph_a(
                 "graph_id": graph_id,
                 "collection": collection,
                 "extractor": OpenAIExtractionClient(
+                    load_llm_settings(),
+                    load_langsmith_settings(),
+                ),
+                "linker": OpenAIWorkLinkingClient(
                     load_llm_settings(),
                     load_langsmith_settings(),
                 ),

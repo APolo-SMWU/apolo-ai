@@ -15,6 +15,9 @@ from apolo.contracts.extraction import ExtractionResult
 from apolo.contracts.source import CollectedSource
 from apolo.db.github_repository_links import link_github_repository_urls
 from apolo.db.graph_a import GraphASourceWrite, apply_source_extraction
+from apolo.db.resolution import load_work_summaries
+from apolo.db.source import PersistedCollectedSource
+from apolo.extraction.work_linking import WorkLinker, accepted_links, new_work_summaries
 from apolo.llm.config import load_llm_settings
 from apolo.source_collection import StoredPublicCollection
 
@@ -51,8 +54,9 @@ def process_pending_sources(
     extractor: CandidateExtractor,
     *,
     now: datetime | None = None,
+    linker: WorkLinker | None = None,
 ) -> GraphAProcessingResult:
-    """변경 Source를 제한된 동시성으로 추출하고 저장은 원래 순서대로 처리"""
+    """변경 Source를 제한된 동시성으로 추출하고 Work 병합 판정 후 원래 순서대로 저장"""
     processed_at = now or datetime.now(UTC)
     if processed_at.tzinfo is None or processed_at.utcoffset() is None:
         raise ValueError("시간대가 있는 처리 시각이 필요합니다.")
@@ -62,11 +66,14 @@ def process_pending_sources(
     pending = collection.sources_needing_extraction()
     if pending:
         worker_count = min(load_llm_settings().max_parallel_extractions, len(pending))
+        extracted: list[
+            tuple[int, CollectedSource, PersistedCollectedSource, ExtractionResult]
+        ] = []
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = [executor.submit(extractor.extract, source) for source, _ in pending]
-            for (source, stored), future in zip(pending, futures, strict=True):
+            for index, ((source, stored), future) in enumerate(zip(pending, futures, strict=True)):
                 try:
-                    extraction = future.result()
+                    extracted.append((index, source, stored, future.result()))
                 except Exception as error:
                     logger.warning(
                         "Graph A 추출 실패 %s: %s", source.source_key, type(error).__name__
@@ -78,41 +85,46 @@ def process_pending_sources(
                             message="LLM 후보 추출에 실패했습니다.",
                         )
                     )
-                    continue
 
-                try:
-                    with connection.transaction():
-                        expected_version = _lock_and_load_version(connection, graph_id)
-                        write = apply_source_extraction(
-                            connection,
-                            graph_id,
-                            expected_version,
-                            source,
-                            stored,
-                            extraction,
-                            now=processed_at,
-                        )
-                        writes.append(write)
-                except Exception as error:
+        links = _link_works(connection, graph_id, extracted, linker)
+        for index, source, stored, extraction in extracted:
+            forced_ids = {
+                ref: links[f"s{index}:{ref}"]
+                for ref in (entity.ref for entity in extraction.entities)
+                if f"s{index}:{ref}" in links
+            }
+            try:
+                with connection.transaction():
+                    expected_version = _lock_and_load_version(connection, graph_id)
+                    write = apply_source_extraction(
+                        connection,
+                        graph_id,
+                        expected_version,
+                        source,
+                        stored,
+                        extraction,
+                        now=processed_at,
+                        forced_ids=forced_ids,
+                    )
+                    writes.append(write)
+            except Exception as error:
+                logger.warning("Graph A 저장 실패 %s: %s", source.source_key, type(error).__name__)
+                warnings.append(
+                    GraphAProcessingWarning(
+                        source_key=source.source_key,
+                        code="persistence_failed",
+                        message="후보 검증 또는 KG 저장에 실패했습니다.",
+                    )
+                )
+            else:
+                if write.issues:
+                    # 추출 값에는 개인정보가 있을 수 있어 코드와 개수만 남긴다.
+                    counts = Counter(issue.code for issue in write.issues)
                     logger.warning(
-                        "Graph A 저장 실패 %s: %s", source.source_key, type(error).__name__
+                        "Graph A 검증 경고 %s: %s",
+                        source.source_key,
+                        ", ".join(f"{code}x{n}" for code, n in sorted(counts.items())),
                     )
-                    warnings.append(
-                        GraphAProcessingWarning(
-                            source_key=source.source_key,
-                            code="persistence_failed",
-                            message="후보 검증 또는 KG 저장에 실패했습니다.",
-                        )
-                    )
-                else:
-                    if write.issues:
-                        # 추출 값에는 개인정보가 있을 수 있어 코드와 개수만 남긴다.
-                        counts = Counter(issue.code for issue in write.issues)
-                        logger.warning(
-                            "Graph A 검증 경고 %s: %s",
-                            source.source_key,
-                            ", ".join(f"{code}x{n}" for code, n in sorted(counts.items())),
-                        )
 
     github_links = link_github_repository_urls(
         connection,
@@ -138,6 +150,35 @@ def process_pending_sources(
     )
 
     return GraphAProcessingResult(tuple(writes), tuple(warnings))
+
+
+def _link_works(
+    connection: psycopg.Connection,
+    graph_id: UUID,
+    extracted: list[tuple[int, CollectedSource, PersistedCollectedSource, ExtractionResult]],
+    linker: WorkLinker | None,
+) -> dict[str, UUID]:
+    """새 Work 후보와 기존 Work를 한 번에 판정한다. 실패하면 규칙 병합만 쓴다"""
+    if linker is None:
+        return {}
+    new = [
+        summary
+        for index, source, _, extraction in extracted
+        for summary in new_work_summaries(index, source, extraction).values()
+    ]
+    if not new:
+        return {}
+    try:
+        existing = load_work_summaries(connection, graph_id)
+        works = [*existing.values(), *new]
+        if len(works) < 2:
+            return {}
+        result = linker.link(works)
+    except Exception as error:
+        logger.warning("Work 병합 판정 실패: %s", type(error).__name__)
+        return {}
+    existing_ids = {summary.id: entity_id for entity_id, summary in existing.items()}
+    return accepted_links(result, works, existing_ids)
 
 
 def _lock_and_load_version(connection: psycopg.Connection, graph_id: UUID) -> int:

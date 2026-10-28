@@ -22,7 +22,7 @@ from apolo.collectors.notion import (
 NOTION_IMAGE_WIDTH = 800
 # 상장·자격·자기소개 섹션 이미지는 프로젝트 대표 이미지가 아니다.
 EXCLUDED_SECTION = re.compile(
-    r"award|honor|certif|license|about|hello|profile|수상|상장|자격|소개|프로필", re.IGNORECASE
+    r"award|honor|certif|license|about|intro|profile|수상|상장|자격|소개|프로필", re.IGNORECASE
 )
 
 

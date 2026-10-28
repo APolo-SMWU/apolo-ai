@@ -1,11 +1,12 @@
 """Graph A LangGraph 실행 상태"""
 
 from datetime import datetime
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 from uuid import UUID
 
 import psycopg
 
+from apolo.extraction.work_linking import WorkLinker
 from apolo.graph_a.processing import CandidateExtractor, GraphAProcessingResult
 from apolo.source_collection import StoredPublicCollection
 
@@ -17,5 +18,6 @@ class GraphAState(TypedDict):
     graph_id: UUID
     collection: StoredPublicCollection
     extractor: CandidateExtractor
+    linker: NotRequired[WorkLinker | None]
     now: datetime | None
     result: GraphAProcessingResult | None

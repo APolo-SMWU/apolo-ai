@@ -15,6 +15,7 @@ from apolo.extraction.resolution import (
     candidate_strong_keys,
     resolve_existing_entities,
 )
+from apolo.extraction.work_linking import WorkSummary, representative_snippet
 from apolo.ontology.values import is_valid_value
 
 
@@ -76,6 +77,87 @@ def load_entities_for_resolution(
     return existing
 
 
+def load_work_summaries(connection: psycopg.Connection, graph_id: UUID) -> dict[UUID, WorkSummary]:
+    """병합 판정용 활성 Work 요약. id는 W1, W2 … 순서로 붙인다"""
+    with connection.cursor(row_factory=tuple_row) as cursor:
+        cursor.execute(
+            """
+            SELECT e.id,
+                COALESCE((
+                    SELECT jsonb_object_agg(p.predicate, p.vals) FROM (
+                        SELECT f.predicate, jsonb_agg(f.value) AS vals FROM ai.facts f
+                        WHERE f.entity_id=e.id AND f.status='active' GROUP BY f.predicate
+                    ) p
+                ), '{}'::jsonb),
+                COALESCE((
+                    SELECT jsonb_agg(sf.value) FROM ai.relations r
+                    JOIN ai.facts sf ON sf.entity_id=r.object_entity_id
+                     AND sf.predicate='name' AND sf.status='active'
+                    WHERE r.graph_id=e.graph_id AND r.subject_entity_id=e.id
+                      AND r.predicate='usesSkill' AND r.status='active'
+                ), '[]'::jsonb),
+                COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'locator', ev.locator, 'snippet', ev.snippet,
+                        'source_type', d.source_type,
+                        'page_title', (
+                            SELECT t.snippet FROM ai.evidence t
+                            WHERE t.source_document_id=d.id AND d.source_type='notion'
+                              AND replace(t.locator, '-', '')
+                                  = 'notion.block:' || replace(d.source_key, 'notion:page:', '')
+                            LIMIT 1
+                        )
+                    ))
+                    FROM ai.evidence ev JOIN ai.source_documents d ON d.id=ev.source_document_id
+                    WHERE ev.id IN (
+                        SELECT evidence_id FROM ai.entity_evidence WHERE entity_id=e.id
+                        UNION SELECT evidence_id FROM ai.fact_evidence WHERE entity_id=e.id
+                    )
+                ), '[]'::jsonb)
+            FROM ai.entities e
+            WHERE e.graph_id=%s AND e.class_type='Work' AND e.status='active'
+            ORDER BY e.created_at, e.id
+            """,
+            (graph_id,),
+        )
+        rows = cursor.fetchall()
+
+    summaries: dict[UUID, WorkSummary] = {}
+    for entity_id, facts, skills, evidence in rows:
+        title = next((v for v in facts.get("title", []) if isinstance(v, str)), None)
+        if title is None:
+            continue
+        contexts = [
+            " > ".join(
+                part
+                for part in (item["page_title"], item["locator"].partition(";section_path=")[2])
+                if part
+            )
+            for item in evidence
+            if item["source_type"] == "notion"
+        ]
+        summaries[entity_id] = WorkSummary(
+            id=f"W{len(summaries) + 1}",
+            source_types=tuple(sorted({item["source_type"] for item in evidence})),
+            title=title,
+            kind=_first_text(facts, "kind"),
+            role=_first_text(facts, "role"),
+            start=_first_text(facts, "start"),
+            end=_first_text(facts, "end"),
+            urls=tuple(v for v in facts.get("url", []) if isinstance(v, str)),
+            skills=tuple(dict.fromkeys(skills))[:5],
+            snippet=representative_snippet(
+                [(item["locator"], item["snippet"]) for item in evidence], title
+            ),
+            context=tuple(dict.fromkeys(c for c in contexts if c))[:3],
+        )
+    return summaries
+
+
+def _first_text(facts: dict[str, list[object]], predicate: str) -> str | None:
+    return next((v for v in facts.get(predicate, []) if isinstance(v, str)), None)
+
+
 def stage_extracted_entities(
     connection: psycopg.Connection,
     graph_id: UUID,
@@ -83,6 +165,7 @@ def stage_extracted_entities(
     extraction: ExtractionResult,
     *,
     now: datetime,
+    forced_ids: dict[str, UUID] | None = None,
 ) -> EntityResolution:
     """KG 잠금 후 새 Entity·URL 키 삽입, Fact·Relation 저장과 같은 외부 트랜잭션 필수
 
@@ -103,7 +186,7 @@ def stage_extracted_entities(
             raise ValueError("KG가 없거나 읽은 이후 버전이 변경되었습니다.")
 
         resolution = resolve_existing_entities(
-            extraction, load_entities_for_resolution(connection, graph_id)
+            extraction, load_entities_for_resolution(connection, graph_id), forced_ids
         )
         classes = {entity.ref: entity.class_type for entity in extraction.entities}
         new_entities = {entity_id: classes[ref] for ref, entity_id in resolution.new_ids.items()}

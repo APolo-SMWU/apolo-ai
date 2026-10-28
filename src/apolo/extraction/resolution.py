@@ -74,9 +74,16 @@ def candidate_strong_keys(extraction: ExtractionResult) -> dict[str, list[Strong
 
 
 def resolve_existing_entities(
-    extraction: ExtractionResult, existing: list[ExistingEntity]
+    extraction: ExtractionResult,
+    existing: list[ExistingEntity],
+    forced_ids: dict[str, UUID] | None = None,
 ) -> EntityResolution:
-    """한 사용자 KG의 기존 ID 재사용·새 ID 발급·모호한 후보 보류"""
+    """한 사용자 KG의 기존 ID 재사용·새 ID 발급·모호한 후보 보류
+
+    forced_ids는 Work 병합 판정이 정한 ref → Work ID다. 규칙 비교보다 먼저 적용한다.
+    아직 없는 ID면 그 ID로 새 Work를 만들어 뒤따르는 Source가 같은 ID를 쓰게 한다.
+    """
+    forced_ids = forced_ids or {}
     classes: dict[str, str] = {}
     for entity in extraction.entities:
         if entity.ref in classes:
@@ -146,7 +153,17 @@ def resolve_existing_entities(
                 pool.append(replace(candidate, id=entity_id))
                 continue
 
-        matches = {item.id for item in pool if _same_entity(candidate, item)}
+        forced_id = forced_ids.get(ref) if entity.class_type == "Work" else None
+        if forced_id is not None and not any(item.id == forced_id for item in pool):
+            resolved_ids[ref] = forced_id
+            new_ids[ref] = forced_id
+            unmatched.append(ref)
+            pool.append(replace(candidate, id=forced_id))
+            continue
+        if forced_id is not None:
+            matches = {forced_id}
+        else:
+            matches = {item.id for item in pool if _same_entity(candidate, item)}
         if len(matches) > 1:
             matching_entities = [item for item in pool if item.id in matches]
             if all(

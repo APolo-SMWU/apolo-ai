@@ -14,6 +14,7 @@ def process_sources_node(state: GraphAState) -> dict[str, object]:
         state["collection"],
         state["extractor"],
         now=state["now"],
+        linker=state.get("linker"),
     )
     return {"result": result}
 

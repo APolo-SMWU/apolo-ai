@@ -41,6 +41,7 @@ def apply_source_extraction(
     extraction: ExtractionResult,
     *,
     now: datetime,
+    forced_ids: dict[str, UUID] | None = None,
 ) -> GraphASourceWrite:
     """근거 확인·Entity/Fact/Relation/Evidence·처리 해시·버전을 한 트랜잭션으로 반영"""
     if connection.info.transaction_status != TransactionStatus.INTRANS:
@@ -60,7 +61,7 @@ def apply_source_extraction(
 
     with connection.transaction(), connection.cursor(row_factory=tuple_row) as cursor:
         resolution = stage_extracted_entities(
-            connection, graph_id, expected_version, persistent, now=now
+            connection, graph_id, expected_version, persistent, now=now, forced_ids=forced_ids
         )
         persisted = persist_extracted_candidates(
             connection,
