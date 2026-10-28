@@ -10,7 +10,6 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from apolo.collectors.github_images import sign_work_image_urls
 from apolo.collectors.public import PublicCollectionWarning
 from apolo.contracts.cv import CvGenerateRequest, CvGenerateResponse
 from apolo.contracts.generate import (
@@ -27,6 +26,7 @@ from apolo.cv.client import OpenAICvGenerationClient
 from apolo.db.connection import connect_db
 from apolo.db.knowledge import load_active_knowledge_graph
 from apolo.db.seed import load_seed_by_user_id
+from apolo.db.source import load_source_documents
 from apolo.generation import build_graph_b_response, build_profile_only_response
 from apolo.graph_a.processing import GraphAProcessingWarning
 from apolo.graph_a.workflow import build_graph_a
@@ -38,6 +38,7 @@ from apolo.llm.config import load_langsmith_settings, load_llm_settings
 from apolo.ontology.personal import ONTOLOGY_VERSION
 from apolo.seed.persistence import ensure_profile_seed
 from apolo.source_collection import collect_and_store_public_sources
+from apolo.work_images import attach_work_images, clear_work_images, work_document_ids
 
 app = FastAPI(title="APolo AI")
 logger = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
             warnings.extend(graph_b_warnings)
             if graph_b_result is not None:
                 response = build_graph_b_response(graph_b_result)
-                await _sign_work_image_urls(response)
+                await _attach_work_images(connection, response, graph_b_result)
             else:
                 latest_seed = load_seed_by_user_id(connection, request.user_id)
                 if latest_seed is None:
@@ -141,7 +142,7 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
             warnings.extend(graph_b_warnings)
             if graph_b_result is not None:
                 response = build_graph_b_response(graph_b_result)
-                await _sign_work_image_urls(response)
+                await _attach_work_images(connection, response, graph_b_result)
             else:
                 latest_seed = load_seed_by_user_id(connection, request.user_id) or seed
                 response = GenerateResponse(
@@ -262,13 +263,18 @@ async def _run_graph_a(
     return GraphAResult(warnings, source_keys)
 
 
-async def _sign_work_image_urls(response: GenerateResponse) -> None:
-    """이미지 서명 실패로 생성 전체를 실패시키지 않는다"""
+async def _attach_work_images(
+    connection, response: GenerateResponse, result: GraphBGenerationResult
+) -> None:
+    """이미지 조회 실패로 생성 전체를 실패시키지 않고 이미지만 비운다"""
+    graph = result.selection.graph
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await sign_work_image_urls(response, client=client)
+        documents = load_source_documents(connection, work_document_ids(response, graph))
+        async with httpx.AsyncClient(timeout=20) as client:
+            await attach_work_images(response, graph, documents, client=client)
     except Exception:
-        logger.warning("Work 이미지 서명 실패", exc_info=True)
+        logger.warning("Work 이미지 조회 실패", exc_info=True)
+        clear_work_images(response)
 
 
 def _collection_warning(warning: PublicCollectionWarning) -> GenerateWarning:

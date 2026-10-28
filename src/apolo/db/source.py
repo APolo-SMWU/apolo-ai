@@ -42,6 +42,21 @@ def load_source(
     )
 
 
+def load_source_documents(
+    connection: psycopg.Connection, document_ids: list[UUID]
+) -> list[SourceDocument]:
+    """ID 목록의 문서를 조회한다. 없는 ID는 결과에서 빠진다."""
+    if not document_ids:
+        return []
+    with connection.cursor(row_factory=tuple_row) as cursor:
+        cursor.execute(
+            "SELECT to_jsonb(d)::text FROM ai.source_documents d WHERE d.id = ANY(%s)",
+            (document_ids,),
+        )
+        rows = cursor.fetchall()
+    return [SourceDocument.model_validate_json(row[0]) for row in rows]
+
+
 def save_source_capture(
     connection: psycopg.Connection, document: SourceDocument, snapshot: SourceSnapshot
 ) -> tuple[SourceDocument, SourceSnapshot]:
