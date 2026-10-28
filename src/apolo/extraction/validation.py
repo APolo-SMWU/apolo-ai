@@ -97,14 +97,22 @@ def validate_extraction(extraction: ExtractionResult) -> ExtractionValidation:
     )
     entity_evidence = _merge_entity_evidence(extraction.entity_evidence, entities, report)
 
+    misclassified = _credential_works(extraction.facts, entities)
     unidentified = _unidentified_refs(entities, facts + uncertain, relations)
     for index, entity in enumerate(extraction.entities):
-        if entity.ref in unidentified:
+        if entity.ref in misclassified:
+            report(
+                "CREDENTIAL_AS_WORK",
+                f"entities[{index}]",
+                "자격·수상 kind가 붙은 Work라 딸린 Fact·Relation과 함께 제외합니다.",
+            )
+        elif entity.ref in unidentified:
             report(
                 "MISSING_IDENTITY",
                 f"entities[{index}]",
                 "식별 속성이 없어 딸린 Fact·Relation과 함께 제외합니다.",
             )
+    unidentified |= misclassified
     entities = {ref: entity for ref, entity in entities.items() if ref not in unidentified}
     facts = [fact for fact in facts if fact.entity_ref not in unidentified]
     uncertain = [fact for fact in uncertain if fact.entity_ref not in unidentified]
@@ -133,6 +141,20 @@ def validate_extraction(extraction: ExtractionResult) -> ExtractionValidation:
         entity_evidence=entity_evidence,
     )
     return ExtractionValidation(result=result, uncertain=uncertain, issues=issues)
+
+
+def _credential_works(facts: list[FactCandidate], entities: dict[str, EntityCandidate]) -> set[str]:
+    """Credential의 kind 값이 붙은 Work는 자격·수상을 Work로 잘못 분류한 것이다"""
+    credential_kinds = PROPERTY_VALUES[("Credential", "kind")]
+    return {
+        fact.entity_ref
+        for fact in facts
+        if fact.predicate == "kind"
+        and fact.entity_ref in entities
+        and entities[fact.entity_ref].class_type == "Work"
+        and isinstance(fact.value, str)
+        and "_".join(fact.value.lower().split()) in credential_kinds
+    }
 
 
 def _unidentified_refs(

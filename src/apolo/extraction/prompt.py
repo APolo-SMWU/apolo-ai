@@ -151,7 +151,10 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
         - Activity: 동아리·단체 소속, 회원 활동, 멘토링·봉사·교육 프로그램, 행사 참여가 중심인 항목.
         - 활동에서 별도 결과물을 만들었다는 근거가 있으면 Activity와 Work를 각각 제안한다.
         - Experience: 고용주 아래의 직무·재직이 중심인 항목.
-        - Credential: 자격·수상 등 온톨로지에 해당하는 증명 항목.
+        - Credential: 자격증·어학 점수·면허는 kind=certification, 수상·선정은 kind=award로 분류한다.
+          결과물을 만든 일이 아니므로 Work로 만들지 않는다. 수상한 결과물이 따로 서술되면
+          그 결과물은 Work로, 수상은 Credential로 각각 제안한다.
+          기술·도구 이름과 프로그램·과정 참여는 Credential이 아니다.
         - 학술 논문·저서는 Work.kind=publication으로 분류한다.
         - Work.kind=opensource는 본인이 소유하지 않은 공개 프로젝트에 기여한 근거가 있을 때만 쓴다.
           근거 예: 다른 저장소에 병합된 PR, 이슈 해결, 메인테이너 활동, 외부 프로젝트 기여 서술.
