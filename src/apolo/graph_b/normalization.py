@@ -599,7 +599,64 @@ def _work_url_label(href: str) -> str | None:
         return None
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or hostname is None:
         return None
-    return "GitHub" if hostname in {"github.com", "www.github.com"} else "Link"
+    host = hostname.lower().removeprefix("www.")
+    path = parsed.path.lower()
+    if host == "github.com":
+        return "GitHub"
+    google_slides = host == "docs.google.com" and path.startswith("/presentation/")
+    if path.endswith((".ppt", ".pptx")) or google_slides or host in _SLIDE_HOSTS:
+        return "PPT"
+    for label, hosts in _WORK_URL_LABELS:
+        if any(host == h or host.endswith(f".{h}") for h in hosts):
+            return label
+    if host == "huggingface.co" and path.startswith("/spaces/"):
+        return "Demo"
+    return "Link"
+
+
+_SLIDE_HOSTS = frozenset(
+    {
+        "slideshare.net",
+        "speakerdeck.com",
+        "canva.com",
+        "miricanvas.com",
+        "figma.com",
+    }
+)
+_WORK_URL_LABELS: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        "Paper",
+        frozenset(
+            {
+                "arxiv.org",
+                "doi.org",
+                "dl.acm.org",
+                "ieeexplore.ieee.org",
+                "openreview.net",
+                "aclanthology.org",
+                "semanticscholar.org",
+                "dbpia.co.kr",
+                "riss.kr",
+                "kci.go.kr",
+            }
+        ),
+    ),
+    ("Video", frozenset({"youtube.com", "youtu.be", "vimeo.com"})),
+    ("Notion", frozenset({"notion.so", "notion.site"})),
+    (
+        "Demo",
+        frozenset(
+            {
+                "vercel.app",
+                "netlify.app",
+                "github.io",
+                "pages.dev",
+                "streamlit.app",
+                "herokuapp.com",
+            }
+        ),
+    ),
+)
 
 
 def _deduplicate_work_items(
