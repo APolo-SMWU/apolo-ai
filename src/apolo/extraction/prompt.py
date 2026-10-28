@@ -152,7 +152,11 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
         - 활동에서 별도 결과물을 만들었다는 근거가 있으면 Activity와 Work를 각각 제안한다.
         - Experience: 고용주 아래의 직무·재직이 중심인 항목.
         - Credential: 자격·수상 등 온톨로지에 해당하는 증명 항목.
-        - 학술 논문·저서는 Work.kind=publication, 공개 저장소 기여는 Work.kind=opensource로 분류한다.
+        - 학술 논문·저서는 Work.kind=publication으로 분류한다.
+        - Work.kind=opensource는 본인이 소유하지 않은 공개 프로젝트에 기여한 근거가 있을 때만 쓴다.
+          근거 예: 다른 저장소에 병합된 PR, 이슈 해결, 메인테이너 활동, 외부 프로젝트 기여 서술.
+        - 본인·팀이 만든 결과물은 공개 저장소·팀 저장소 fork·라이선스 여부와 관계없이
+          Work.kind=project로 분류한다. 저장소가 공개되어 있다는 것만으로 opensource가 아니다.
         - Work.kind 또는 본인 참여의 근거가 부족하면 해당 후보를 생략한다.
 
         ## Entity와 Relation
