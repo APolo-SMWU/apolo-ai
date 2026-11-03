@@ -1,0 +1,30 @@
+name: Deploy
+on:
+  workflow_dispatch:      # 지금은 수동 실행 버튼으로만 실행 (자동 배포는 다음 단계에서)
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml      # 의존성·import 확인이 통과해야 다음 단계 진행
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 설정
+        env:
+          KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          KNOWN: ${{ secrets.LIGHTSAIL_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+
+      - name: 서버에서 배포 스크립트 실행
+        env:
+          TARGET: ${{ secrets.LIGHTSAIL_USER }}@${{ secrets.LIGHTSAIL_HOST }}
+        run: ssh "$TARGET" 'bash ~/apolo-ai/deploy.sh'
