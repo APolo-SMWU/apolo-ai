@@ -220,12 +220,24 @@ def normalize_notion_blocks(
 
     lines = [f"# {title}"]
     evidence_candidates = [EvidenceCandidate(snippet=title, locator=f"notion.block:{root_id}")]
+    tables_by_row = {
+        _normalized_block_id(row_id): table
+        for _, table in block_values.values()
+        if _block_type(table) == "table" and isinstance(table.get("content"), list)
+        for row_id in table["content"]
+        if isinstance(row_id, str)
+    }
     section_path: list[tuple[int, str]] = []
     for block_id, block in _walk_descendant_blocks(root_id, block_values):
-        text = _block_plain_text(block, block_values)
+        block_type = _block_type(block)
+        table = tables_by_row.get(_normalized_block_id(block_id))
+        text = (
+            _table_row_text(block, table, block_values)
+            if block_type == "table_row"
+            else _block_plain_text(block, block_values)
+        )
         if not text:
             continue
-        block_type = _block_type(block)
         heading_level = _heading_level(block_type)
         if heading_level is not None:
             section_path = [
@@ -238,6 +250,12 @@ def normalize_notion_blocks(
         line = _format_block_line(block_type, text, block)
         if line is None:
             continue
+        if table is not None:
+            header = _table_header_text(table, block_id, block_values)
+            if header:
+                # 청크가 나뉘어도 각 행의 값과 열 이름을 함께 이해할 수 있게 한다.
+                # 근거 snippet에는 원래 행만 남긴다.
+                line = f"[Notion table columns: {header}] {line}"
         section_names = [heading for _, heading in section_path]
         section_suffix = (
             f";section_path={' > '.join(section_names)}" if section_names else ""
@@ -865,11 +883,19 @@ def _block_plain_text(
     """
     properties = block.get("properties")
     title = properties.get("title") if isinstance(properties, Mapping) else None
-    if not isinstance(title, list):
+    return _rich_text_plain_text(title, records)
+
+
+def _rich_text_plain_text(
+    fragments: object,
+    records: Mapping[str, tuple[str, Mapping[str, Any]]] | None,
+) -> str:
+    """문단과 표 셀에 공통인 rich text·링크 변환."""
+    if not isinstance(fragments, list):
         return ""
 
     parts: list[str] = []
-    for fragment in title:
+    for fragment in fragments:
         if not (isinstance(fragment, list) and fragment and isinstance(fragment[0], str)):
             continue
         text = fragment[0]
@@ -878,6 +904,44 @@ def _block_plain_text(
             text = url if text.strip() == "‣" else f"{text} ({url})"
         parts.append(text)
     return "".join(parts).strip()
+
+
+def _table_row_text(
+    row: Mapping[str, Any],
+    table: Mapping[str, Any] | None,
+    records: Mapping[str, tuple[str, Mapping[str, Any]]],
+) -> str:
+    """열 ID의 표시 순서를 따르며 빈 셀의 위치와 행 경계를 보존한다."""
+    properties = row.get("properties")
+    if not isinstance(properties, Mapping):
+        return ""
+    table_format = table.get("format") if table is not None else None
+    order = (
+        table_format.get("table_block_column_order")
+        if isinstance(table_format, Mapping) else None
+    )
+    if not isinstance(order, list) or not order or not all(isinstance(k, str) for k in order):
+        order = list(properties)
+    cells = [_rich_text_plain_text(properties.get(key), records) for key in order]
+    return " | ".join(cells) if any(cells) else ""
+
+
+def _table_header_text(
+    table: Mapping[str, Any], row_id: str,
+    records: Mapping[str, tuple[str, Mapping[str, Any]]],
+) -> str:
+    """머리글을 데이터 행의 문맥으로 제공하며, 다른 표의 머리글은 섞지 않는다."""
+    table_format = table.get("format")
+    rows = table.get("content")
+    if (
+        not isinstance(table_format, Mapping)
+        or table_format.get("table_block_column_header") is not True
+        or not isinstance(rows, list) or not rows or not isinstance(rows[0], str)
+        or _normalized_block_id(rows[0]) == _normalized_block_id(row_id)
+    ):
+        return ""
+    _, header = records.get(_normalized_block_id(rows[0]), ("", {}))
+    return _table_row_text(header, table, records)
 
 
 def _fragment_url(
@@ -923,7 +987,7 @@ def _format_block_line(block_type: str, text: str, block: Mapping[str, Any]) -> 
         return f"▸ {text}"
     if block_type == "code":
         return f"```\n{text}\n```"
-    if block_type in {"text", "callout"}:
+    if block_type in {"text", "callout", "table_row"}:
         return text
     return None
 
