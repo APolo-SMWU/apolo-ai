@@ -1,0 +1,23 @@
+name: CI
+on:
+  pull_request:
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version     # 3.12
+
+      - name: uv 설치
+        run: pip install uv
+
+      - name: 의존성 설치 (uv.lock 기준)
+        run: uv sync --locked
+
+      - name: 앱이 import 되는지 확인
+        run: uv run python -c "import apolo.api"
