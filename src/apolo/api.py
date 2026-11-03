@@ -1,5 +1,6 @@
 """APolo AI 서버의 FastAPI 진입점."""
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -65,7 +66,12 @@ def health() -> dict[str, str]:
 
 
 @app.post("/generate", response_model=GenerateResponse, response_model_exclude_none=True)
-async def generate(request: GenerateRequest) -> GenerateResponse:
+def generate(request: GenerateRequest) -> GenerateResponse:
+    """동기 DB 대기가 ASGI 이벤트 루프를 막지 않도록 요청 전체를 worker에서 실행한다."""
+    return asyncio.run(_generate(request))
+
+
+async def _generate(request: GenerateRequest) -> GenerateResponse:
     """프로필 Seed·외부 Source를 반영한 뒤 Graph B 콘텐츠를 생성한다."""
     source = SeedProfileInput(
         userId=request.user_id,
@@ -113,7 +119,12 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
 
 
 @app.post("/update-content", response_model=GenerateResponse, response_model_exclude_none=True)
-async def update_content(request: UpdateContentRequest) -> GenerateResponse:
+def update_content(request: UpdateContentRequest) -> GenerateResponse:
+    """생성과 동일하게 트랜잭션의 시작부터 종료까지 worker에서 실행한다."""
+    return asyncio.run(_update_content(request))
+
+
+async def _update_content(request: UpdateContentRequest) -> GenerateResponse:
     """기존 KG의 변경 Source를 재수집하고 Graph A를 실행한다."""
     try:
         with connect_db() as connection:
