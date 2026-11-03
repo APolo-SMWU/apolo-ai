@@ -7,10 +7,12 @@ from uuid import UUID
 import httpx
 import psycopg
 
+from apolo.collectors.file import collect_file_source
 from apolo.collectors.public import (
     PublicCollectionWarning,
     collect_public_sources,
 )
+from apolo.contracts.attachment import SourceAttachment
 from apolo.contracts.source import CollectedSource
 from apolo.db.source import PersistedCollectedSource, persist_collected_source
 from apolo.ontology.personal import ONTOLOGY_VERSION
@@ -50,17 +52,33 @@ async def collect_and_store_public_sources(
     *,
     client: httpx.AsyncClient,
     fetched_at: datetime | None = None,
+    attachments: list[SourceAttachment] | None = None,
 ) -> StoredPublicCollection:
-    """GitHub·Notion 수집 후 성공한 Source만 한 트랜잭션으로 저장"""
-    collected = await collect_public_sources(source_urls, client=client)
+    """공개 URL·첨부 수집 후 성공한 Source만 한 트랜잭션으로 저장"""
     fetched_at = fetched_at or datetime.now(UTC)
-    warnings = list(collected.warnings)
+    warnings: list[PublicCollectionWarning] = []
+    sources: list[CollectedSource] = []
+    # 외부 페이지 수집이 길어져도 임시 다운로드 주소가 먼저 만료되지 않게 한다.
+    for attachment in attachments or []:
+        try:
+            sources.append(await collect_file_source(attachment, client=client))
+        except ValueError as error:
+            warnings.append(
+                PublicCollectionWarning(
+                    source_url=attachment.file_name,
+                    code=getattr(error, "code", "invalid_file"),
+                    message=str(error),
+                )
+            )
+    collected = await collect_public_sources(source_urls, client=client)
+    sources = [*collected.sources, *sources]
+    warnings = [*collected.warnings, *warnings]
     collected_sources: list[CollectedSource] = []
     saved_sources: list[PersistedCollectedSource] = []
     seen_keys: set[str] = set()
 
     with connection.transaction():
-        for source in collected.sources:
+        for source in sources:
             if source.source_key in seen_keys:
                 warnings.append(
                     PublicCollectionWarning(
@@ -72,9 +90,7 @@ async def collect_and_store_public_sources(
                 continue
             seen_keys.add(source.source_key)
             saved_sources.append(
-                persist_collected_source(
-                    connection, graph_id, source, fetched_at=fetched_at
-                )
+                persist_collected_source(connection, graph_id, source, fetched_at=fetched_at)
             )
             collected_sources.append(source)
 

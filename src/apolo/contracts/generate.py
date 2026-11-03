@@ -1,6 +1,6 @@
 """Backend ↔ AI /generate 요청·응답 계약. 생성 workflow와 API 실행은 별도 구현한다"""
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -11,32 +11,23 @@ from pydantic import (
     model_serializer,
 )
 
+from apolo.contracts.attachment import MAX_ATTACHMENTS, SourceAttachment
 from apolo.contracts.profile import SeedProfileInput
 
-ShortText = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
-]
-LongText = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)
-]
-AboutDescription = Annotated[
-    str, StringConstraints(strip_whitespace=True, max_length=10_000)
-]
-SkillText = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
-]
-LinkLabel = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)
-]
+ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)]
+AboutDescription = Annotated[str, StringConstraints(strip_whitespace=True, max_length=10_000)]
+SkillText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+LinkLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
 
 
 class GenerateRequest(SeedProfileInput):
-    """Backend 입력을 받는다. 요구사항 생략은 빈 문자열, 첨부는 MVP에서 빈 목록만 허용"""
+    """Backend 입력과 저장된 PDF·Word 첨부 참조를 받는다."""
 
     title: str
     external_links: list[str] = Field(alias="externalLinks")
     requirements: str = ""
-    attachments: list[Any] = Field(default_factory=list, max_length=0)
+    attachments: list[SourceAttachment] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
 
 
 class _ResponseModel(BaseModel):
@@ -79,17 +70,11 @@ TimelineItemKind = Literal[
 
 # 빈 문자열은 날짜 미입력이다. 실제 값은 Backend의 날짜 형식과 맞춘다
 TimelineDate = Annotated[str, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?)?$")]
-TimelineEndDate = Annotated[
-    str, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)?$")
-]
+TimelineEndDate = Annotated[str, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)?$")]
 
-EducationDate = Annotated[
-    str | None,
-    Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")
-]
+EducationDate = Annotated[str | None, Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")]
 EducationEndDate = Annotated[
-    str | None,
-    Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
+    str | None, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
 ]
 
 
@@ -120,13 +105,9 @@ class EducationBlock(_ResponseModel):
     items: list[EducationItem]
 
 
-ExperienceDate = Annotated[
-    str | None,
-    Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")
-]
+ExperienceDate = Annotated[str | None, Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")]
 ExperienceEndDate = Annotated[
-    str | None,
-    Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
+    str | None, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
 ]
 ExperienceItemKind = Literal["fulltime", "contract", "intern", "research"]
 

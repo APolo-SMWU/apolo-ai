@@ -5,11 +5,14 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+# file은 사용자가 올린 문서(PDF 등)다. source_key는 파일 내용 해시로 정한다.
+SourceType = Literal["github", "notion", "file"]
+
 
 class SourceDocument(BaseModel):
     """사용자 KG에 속한 원본 소스. 같은 소스는 안정적인 source_key로 식별한다.
 
-    MVP는 GitHub Profile/Repository와 Public Notion Page를 지원한다.
+    GitHub Profile/Repository, Public Notion Page, 사용자가 올린 파일을 지원한다.
     URL 정규화와 수집 가능한 주소인지 확인하는 일은 Collector에서 처리한다.
     processed_at은 수집 시각이 아니라 분석 완료 시각이며, 분석 전에는 None이다.
     processed_content_hash는 그때 분석한 원문 해시다.
@@ -20,7 +23,7 @@ class SourceDocument(BaseModel):
 
     id: UUID
     graph_id: UUID
-    source_type: Literal["github", "notion"]
+    source_type: SourceType
     source_key: str = Field(min_length=1, pattern=r"\S")
     source_url: str = Field(min_length=1, pattern=r"\S")
     processed_at: AwareDatetime | None = None
@@ -73,6 +76,22 @@ class Evidence(BaseModel):
     created_at: AwareDatetime
 
 
+class EvidenceLayout(BaseModel):
+    """파일의 항목 경계를 추정하는 보조 정보. 그 자체로 사실의 근거는 아니다."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    page: int | None = Field(default=None, ge=1)
+    indent: float | None = None
+    gap_before: float | None = None
+    font_size: float | None = Field(default=None, ge=0)
+    blank_before: bool = False
+    heading_level: int | None = Field(default=None, ge=1, le=9)
+    is_list: bool = False
+    keep_with_next: bool = False
+    table: str | None = None
+
+
 class EvidenceCandidate(BaseModel):
     """Collector가 찾은 원문 후보. SourceDocument가 생긴 뒤 Evidence로 저장한다."""
 
@@ -80,6 +99,7 @@ class EvidenceCandidate(BaseModel):
 
     snippet: str = Field(min_length=1, pattern=r"\S")
     locator: str = Field(min_length=1, pattern=r"\S")
+    layout: EvidenceLayout | None = None
 
 
 class CollectedSource(BaseModel):
@@ -87,9 +107,11 @@ class CollectedSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    source_type: Literal["github", "notion"]
+    source_type: SourceType
     source_key: str = Field(min_length=1, pattern=r"\S")
     source_url: str = Field(min_length=1, pattern=r"\S")
     source_version: str | None = Field(default=None, min_length=1, pattern=r"\S")
     content: str = Field(min_length=1, pattern=r"\S")
     evidence_candidates: list[EvidenceCandidate] = Field(default_factory=list)
+    # 청크의 본문을 이해하도록 함께 전달한 기존 근거. locator를 새로 만들지 않는다.
+    context_evidence_refs: list[str] = Field(default_factory=list)

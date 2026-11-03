@@ -4,6 +4,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from apolo.contracts.attachment import MAX_ATTACHMENTS, SourceAttachment
+
 
 class UpdateContentRequest(BaseModel):
     """기존 KG의 Source를 다시 확인하고 요구사항을 재사용하기 위한 Backend 입력."""
@@ -13,6 +15,7 @@ class UpdateContentRequest(BaseModel):
     user_id: int = Field(gt=0, alias="userId")
     source_links: list[str] = Field(default_factory=list, alias="sourceLinks")
     requirements: str = Field(default="", max_length=2_000)
+    attachments: list[SourceAttachment] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
 
     @field_validator("source_links")
     @classmethod

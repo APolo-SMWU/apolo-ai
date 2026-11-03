@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from apolo.collectors.public import PublicCollectionWarning
+from apolo.contracts.attachment import SourceAttachment
 from apolo.contracts.cv import CvGenerateRequest, CvGenerateResponse
 from apolo.contracts.generate import (
     GenerateMeta,
@@ -80,8 +81,10 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
 
             warnings: list[GenerateWarning] = []
             source_keys: frozenset[str] = frozenset()
-            if source_urls:
-                graph_a_result = await _run_graph_a(connection, seed.id, source_urls)
+            if source_urls or request.attachments:
+                graph_a_result = await _run_graph_a(
+                    connection, seed.id, source_urls, attachments=request.attachments
+                )
                 warnings.extend(graph_a_result.warnings)
                 source_keys = graph_a_result.source_keys
 
@@ -105,7 +108,6 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
             response.warnings.extend(warnings)
         return response
     except Exception as error:
-        
         logger.error("프로필 기반 생성 실패: %s", type(error).__name__)
         raise HTTPException(status_code=500, detail="콘텐츠 생성 중 오류가 발생했습니다.") from None
 
@@ -130,7 +132,9 @@ async def update_content(request: UpdateContentRequest) -> GenerateResponse:
                     ],
                 )
 
-            graph_a_result = await _run_graph_a(connection, seed.id, request.source_links)
+            graph_a_result = await _run_graph_a(
+                connection, seed.id, request.source_links, attachments=request.attachments
+            )
             warnings = list(graph_a_result.warnings)
             graph_b_result, graph_b_warnings = await run_in_threadpool(
                 _run_graph_b,
@@ -184,9 +188,9 @@ def generate_cv(request: CvGenerateRequest) -> CvGenerateResponse:
         )
 
     try:
-        output = OpenAICvGenerationClient(
-            load_llm_settings(), load_langsmith_settings()
-        ).generate(candidates, request.requirements)
+        output = OpenAICvGenerationClient(load_llm_settings(), load_langsmith_settings()).generate(
+            candidates, request.requirements
+        )
     except Exception:
         logger.error("CV 생성 실패", exc_info=True)
         raise HTTPException(status_code=500, detail="CV 생성 중 오류가 발생했습니다.") from None
@@ -194,9 +198,7 @@ def generate_cv(request: CvGenerateRequest) -> CvGenerateResponse:
     assembled = assemble_cv(candidates, output)
     warnings = list(assembled.warnings)
     if not assembled.sections:
-        warnings.append(
-            GenerateWarning(code="CV_EMPTY", message="생성된 CV 항목이 없습니다.")
-        )
+        warnings.append(GenerateWarning(code="CV_EMPTY", message="생성된 CV 항목이 없습니다."))
     return CvGenerateResponse(sections=assembled.sections, meta=meta, warnings=warnings)
 
 
@@ -214,6 +216,8 @@ async def _run_graph_a(
     connection,
     graph_id,
     source_urls: list[str],
+    *,
+    attachments: list[SourceAttachment] | None = None,
 ) -> GraphAResult:
     """공개 Source 수집과 Graph A 실행 결과를 API 경고로 변환"""
     source_keys = frozenset()
@@ -224,6 +228,7 @@ async def _run_graph_a(
                 graph_id,
                 source_urls,
                 client=client,
+                attachments=attachments,
             )
         source_keys = frozenset(source.source_key for source in collection.collected_sources)
         if not collection.collected_sources:
@@ -334,9 +339,7 @@ def _run_graph_b(
         ]
 
     if not result.is_valid:
-        issue_summary = ", ".join(
-            f"{issue.code}@{issue.path}" for issue in result.issues
-        )
+        issue_summary = ", ".join(f"{issue.code}@{issue.path}" for issue in result.issues)
         logger.warning("Graph B 출력 검증 실패: %s", issue_summary)
         return None, [
             GenerateWarning(

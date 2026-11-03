@@ -16,6 +16,7 @@ _OWNER_PREDICATES = {
 
 _SOURCE_CLASSES = {
     "notion": frozenset(_OWNER_PREDICATES),
+    "file": frozenset(_OWNER_PREDICATES),
     "github": frozenset({"Work", "Skill"}),
 }
 

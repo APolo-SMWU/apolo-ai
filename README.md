@@ -41,3 +41,30 @@ uv sync --locked
 uv run ruff check src tests
 uv run pytest
 ```
+
+## PDF·Word 첨부 연결
+
+Backend의 `POST /portfolios/generate`는 기존 multipart `attachments` 필드로 PDF·DOCX를 받는다.
+최대 5개, 파일당 10MB이며 PDF는 텍스트가 있는 문서 30쪽까지 지원한다(OCR 미지원).
+링크 없이 문서만 첨부한 생성도 지원한다. JPG·PNG는 기존처럼 첨부로 저장하며 AI에서 읽지 않는다.
+
+Backend는 원본을 비공개 S3에 저장한 뒤 `/generate`와 `/update-content`에 아래 참조를 전달한다.
+`attachments` 생략·빈 목록은 기존 JSON 요청과 호환된다.
+
+```json
+{
+  "attachments": [{
+    "fileName": "resume.docx",
+    "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "sourceUrl": "portfolios/요청UUID/attachments/파일UUID.docx",
+    "downloadUrl": "https://버킷.s3.ap-northeast-2.amazonaws.com/저장키?서명"
+  }]
+}
+```
+
+AI는 S3 원본을 크기 제한 안에서 내려받아 수집·항목별 분할·Graph A 저장을 수행하고,
+이번 요청의 파일 Source를 Graph B 입력에 포함한다. 임시 다운로드 주소는 DB에 저장하지 않는다.
+첨부 수집 실패는 파일명과 오류 코드로 경고하며 다른 소스 처리는 계속한다.
+
+기존 008까지 적용된 DB에는 서비스 실행 전 `uv run python -m apolo.db.migrate_file_source`를
+실행한다. `APOLO_TEST_DB=1 uv run pytest -q`는 실제 DB 통합 검증 후 테스트 변경을 롤백한다.

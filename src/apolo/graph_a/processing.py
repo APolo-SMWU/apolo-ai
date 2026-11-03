@@ -91,7 +91,9 @@ def process_pending_sources(
             for index, ((source, stored), parts) in enumerate(zip(pending, futures, strict=True)):
                 try:
                     # 조각 하나라도 실패하면 Source 전체를 실패로 둔다
-                    extraction = merge_extractions([future.result() for future in parts])
+                    extraction = merge_extractions(
+                        [future.result() for future in parts], source=source
+                    )
                     extracted.append((index, source, stored, extraction))
                 except Exception as error:
                     logger.warning(

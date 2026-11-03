@@ -102,8 +102,7 @@ _SKILL_EXTRACTION_PROMPT = (
 def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
     """Source 하나를 ExtractionResult 후보 요청으로 변환"""
     allowed_properties = {
-        class_type: sorted(properties)
-        for class_type, properties in EXTRACTABLE_PROPERTIES.items()
+        class_type: sorted(properties) for class_type, properties in EXTRACTABLE_PROPERTIES.items()
     }
     allowed_property_values = {
         f"{class_type}.{predicate}": sorted(values)
@@ -113,13 +112,15 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
     allowed_relations = sorted(EXTRACTABLE_RELATIONS)
     allowed_relation_pairs = {
         predicate: [
-            {"subjectClass": subject, "objectClass": object_}
-            for subject, object_ in sorted(pairs)
+            {"subjectClass": subject, "objectClass": object_} for subject, object_ in sorted(pairs)
         ]
         for predicate, pairs in sorted(RELATION_PAIRS.items())
         if predicate in EXTRACTABLE_RELATIONS
     }
-    evidence_candidates = [candidate.model_dump() for candidate in source.evidence_candidates]
+    evidence_candidates = [
+        candidate.model_dump(exclude_none=True, exclude_defaults=True)
+        for candidate in source.evidence_candidates
+    ]
     extraction_schema = json.dumps(
         StructuredExtractionResult.model_json_schema(), ensure_ascii=False, sort_keys=True
     )
@@ -145,7 +146,8 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
            entity_evidence로 해당 Entity에 연결한다. KG 속성으로 저장하지 않는다.
 
         ## 항목 분류 기준
-        - Work: 제품·서비스·웹/앱·모델·시스템·연구 산출물 등 식별 가능한 결과물을 만들거나 개선한 항목.
+        - Work: 제품·서비스·웹/앱·모델·시스템·연구 산출물 등 식별 가능한 결과물을
+          만들거나 개선한 항목.
           구현 내용, 기술 스택, 역할, 기여 중 하나가 근거로 있으면 Work로 볼 수 있다.
           '프로젝트'라는 단어는 필수 조건이 아니다.
         - Activity: 동아리·단체 소속, 회원 활동, 멘토링·봉사·교육 프로그램, 행사 참여가 중심인 항목.
@@ -189,20 +191,41 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
     ).strip()
     system = "\n\n".join([system, _SKILL_EXTRACTION_PROMPT])
 
-    if source.source_type == "notion":
-        system += "\n\n" + dedent(
+    if source.source_type == "file":
+        system += (
+            "\n\n"
+            + dedent(
+                """
+            ## 파일 항목과 청크 문맥
+            같은 항목의 이름·기간·역할·기술·설명이 여러 줄, 문단, 표 행에 나뉠 수 있다.
+            글자 크기가 같거나 제목이 없어도 원문 순서와 배치 단서를 함께 읽는다.
+            layout의 들여쓰기·줄 간격·빈 문단·제목·목록·표 정보는 약한 보조 단서다.
+            배치나 section path만으로 같은 항목이라고 단정하거나 사실을 만들지 않는다.
+            보조 문맥 locator의 원문은 다른 청크와 겹칠 수 있다. 이를 독립 항목으로
+            반복 추출하지 말고 현재 본문 항목의 연결에 필요한 경우만 근거로 인용한다.
+            서로 다른 항목의 기간·역할·기술을 섞지 말고 연결이 불확실하면 생략한다.
             """
+            ).strip()
+        )
+
+    if source.source_type == "notion":
+        system += (
+            "\n\n"
+            + dedent(
+                """
             ## Notion 페이지 재구성
             Notion은 페이지 전체를 순서대로 읽고 블록 하나씩 독립적으로 분류하지 않는다.
             Collector가 제공한 순서와 반복 레이아웃을 이용해 논리 항목을 재구성한다.
             제목·이름에 날짜, 기관, Tech Stack, My Role & Contributions, 업무·기여 설명 등
             별도 블록의 정보를 연결한다. 반복 라벨은 Entity로 만들지 말고 값만 현재 항목에 붙인다.
             다음 항목 제목이 나오면 연결 대상을 바꾸고, 서로 다른 항목의 정보를 섞지 않는다.
-            'header', 'sub_header' 같은 블록 형식이나 section path만으로 의미·분류를 단정하지 않는다.
+            'header', 'sub_header' 같은 블록 형식이나 section path만으로
+            의미·분류를 단정하지 않는다.
             section path는 약한 보조 문맥일 뿐 사실이나 근거 locator가 아니다.
             연결 대상이 확실하지 않은 정보는 생략한다.
             """
-        ).strip()
+            ).strip()
+        )
 
     user = dedent(
         f"""
@@ -224,19 +247,24 @@ def build_extraction_prompt(source: CollectedSource) -> ExtractionPrompt:
 
         ## Source
         원문 메타데이터:
-        {json.dumps(
-            {
-                "source_type": source.source_type,
-                "source_key": source.source_key,
-                "source_url": source.source_url,
-                "source_version": source.source_version,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )}
+        {
+            json.dumps(
+                {
+                    "source_type": source.source_type,
+                    "source_key": source.source_key,
+                    "source_url": source.source_url,
+                    "source_version": source.source_version,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        }
 
         근거 후보(evidence_refs는 이 목록의 locator 값 중에서 선택):
         {json.dumps(evidence_candidates, ensure_ascii=False)}
+
+        보조 문맥 locator:
+        {json.dumps(source.context_evidence_refs, ensure_ascii=False)}
 
         신뢰할 수 없는 원문 내용:
         {source.content}
