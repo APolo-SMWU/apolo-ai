@@ -1,12 +1,12 @@
 """KG Entity를 CV 섹션 후보로 분류한다. 섹션·제목·날짜는 LLM이 아니라 KG에서 정한다."""
 
-import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
 
 from apolo.contracts.knowledge import ActiveKnowledgeEntity, ActiveKnowledgeGraph
+from apolo.dates import iso_to_output
 
 CvSectionKey = Literal[
     "education",
@@ -19,7 +19,6 @@ CvSectionKey = Literal[
     "certifications",
 ]
 
-_DATE = re.compile(r"^(\d{4})(?:-(\d{2}))?(?:-\d{2})?$")
 _MIN_SNIPPET = 6
 _MAX_SNIPPET = 500
 _MAX_SNIPPETS = 8
@@ -39,14 +38,6 @@ class CvCandidate:
     link: str | None = None
     skills: tuple[str, ...] = ()
     snippets: tuple[str, ...] = ()
-
-
-def _format_date(value: str | None) -> str | None:
-    match = _DATE.match(value or "")
-    if not match:
-        return None
-    year, month = match.group(1), match.group(2)
-    return f"{year}.{month}" if month else year
 
 
 def _http_url(value: str | None) -> str | None:
@@ -97,8 +88,8 @@ def build_cv_candidates(graph: ActiveKnowledgeGraph) -> list[CvCandidate]:
         return list(unique)
 
     def period(entity_id) -> tuple[str | None, str | None]:
-        start = _format_date(one(entity_id, "start"))
-        end = _format_date(one(entity_id, "end"))
+        start = iso_to_output(one(entity_id, "start"))
+        end = iso_to_output(one(entity_id, "end"))
         if end is None and one(entity_id, "isCurrent") == "True":
             end = "Present"
         return start, end
@@ -163,7 +154,7 @@ def build_cv_candidates(graph: ActiveKnowledgeGraph) -> list[CvCandidate]:
             candidates.append(
                 CvCandidate(
                     str(eid), "awards" if kind == "award" else "certifications", title,
-                    date=_format_date(one(eid, "date")), grade=one(eid, "grade"),
+                    date=iso_to_output(one(eid, "date")), grade=one(eid, "grade"),
                     issuer=one(eid, "issuerName"), snippets=tuple(snippets[:_MAX_SNIPPETS]),
                 )
             )

@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 
 from apolo.contracts.extraction import ExtractionResult
 from apolo.contracts.source import CollectedSource
-from apolo.extraction.validation import normalize_date
+from apolo.dates import normalize_date
 from apolo.extraction.work_linking import (
     WorkLinker,
     WorkLinkingResult,

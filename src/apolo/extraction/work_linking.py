@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apolo.contracts.extraction import ExtractionResult
 from apolo.contracts.source import CollectedSource
-from apolo.extraction.validation import normalize_date
+from apolo.dates import normalize_date
 
 MIN_LINK_CONFIDENCE = 0.85
 MAX_SNIPPET_CHARS = 200

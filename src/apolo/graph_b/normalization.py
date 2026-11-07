@@ -24,6 +24,7 @@ from apolo.contracts.generate import (
     WorksBlock,
 )
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
+from apolo.dates import OUTPUT_DATE, PRESENT, date_rank, iso_to_output
 from apolo.graph_b.validators.common import (
     date_values,
     entity_facts,
@@ -44,7 +45,7 @@ _BLOCK_RELATIONS = {
 }
 _EXPERIENCE_KINDS = {"fulltime", "contract", "intern", "research"}
 _ACTIVITY_KINDS = {"club", "volunteer", "program", "talk"}
-_OUTPUT_DATE = re.compile(r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")
+_OUTPUT_DATE = re.compile(rf"^{OUTPUT_DATE}$")
 
 
 def normalize_graph_b_output(
@@ -310,10 +311,9 @@ def _periods_overlap(
 
 
 def _period_bound(value: str | None, *, is_end: bool) -> int | None:
-    if value is None or value == "Present":
-        return None if value is None else 10**9
-    year, _, month = value.partition(".")
-    return int(year) * 12 + (int(month) if month else (12 if is_end else 1))
+    if value is None:
+        return None
+    return date_rank(value, default_month=12 if is_end else 1)
 
 
 def _organization_key(value: str | None) -> str:
@@ -858,8 +858,8 @@ def _date_value(value: str | None, facts, predicate: str) -> str | None:
 def _end_date_value(value: str | None, facts) -> str | None:
     if value is None:
         return None
-    if value == "Present":
-        return "Present" if has_current_fact(facts) else None
+    if value == PRESENT:
+        return PRESENT if has_current_fact(facts) else None
     return _optional_value(value, _valid_dates(date_values(facts)["end"]))
 
 
@@ -867,25 +867,15 @@ def _credential_date_value(value: str | None, facts) -> str | None:
     if value is None:
         return None
     supported = {
-        format_value
-        for format_value in (
-            _format_date(fact.value)
-            for fact in facts
-            if fact.predicate == "date" and isinstance(fact.value, str)
-        )
+        iso_to_output(fact.value) or fact.value
+        for fact in facts
+        if fact.predicate == "date" and isinstance(fact.value, str)
     }
     return _optional_value(value, _valid_dates(supported))
 
 
 def _valid_dates(values: set[str]) -> set[str]:
     return {value for value in values if _OUTPUT_DATE.fullmatch(value)}
-
-
-def _format_date(value: str) -> str:
-    parts = value.split("-")
-    if len(parts) >= 2 and len(parts[0]) == 4 and len(parts[1]) == 2:
-        return f"{parts[0]}.{parts[1]}"
-    return parts[0] if parts and len(parts[0]) == 4 else value
 
 
 def _work_skill_names(graph: ActiveKnowledgeGraph, work_id: UUID) -> set[str]:

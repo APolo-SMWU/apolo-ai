@@ -4,7 +4,6 @@
 외부 Source와 requirements는 아직 다루지 않는다.
 """
 
-import re
 from uuid import UUID
 
 from apolo.contracts.generate import (
@@ -16,6 +15,7 @@ from apolo.contracts.generate import (
     GenerateResponse,
 )
 from apolo.contracts.kg import SeedKnowledgeGraph
+from apolo.dates import date_rank
 from apolo.graph_b.service import GraphBGenerationResult
 from apolo.seed.validation import validate_seed_graph
 
@@ -133,7 +133,7 @@ def build_graph_b_response(result: GraphBGenerationResult) -> GenerateResponse:
     )
 
 
-def _education_sort_key(item: EducationItem) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+def _education_sort_key(item: EducationItem) -> tuple[int, int]:
     """Education은 종료일, 시작일이 최신인 순서로 표시한다.
 
     Present는 가장 최신으로, 확인되지 않은 날짜(null)는 가장 오래된 값으로 취급한다.
@@ -142,12 +142,6 @@ def _education_sort_key(item: EducationItem) -> tuple[tuple[int, int, int], tupl
     return (_education_date_key(item.end_date), _education_date_key(item.start_date))
 
 
-def _education_date_key(value: str | None) -> tuple[int, int, int]:
-    if value == "Present":
-        return (2, 9999, 12)
-    if value is None:
-        return (0, 0, 0)
-    match = re.fullmatch(r"(\d{4})(?:\.(\d{2}))?", value)
-    if match is None:
-        return (0, 0, 0)
-    return (1, int(match.group(1)), int(match.group(2) or 0))
+def _education_date_key(value: str | None) -> int:
+    rank = date_rank(value, default_month=0) if value else None
+    return -1 if rank is None else rank
