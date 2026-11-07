@@ -7,7 +7,7 @@
 
 > **APolo (Personal Online Link Organizer)** — 온톨로지 기반 온라인 명함 웹사이트의 AI 서비스
 
-📑 [발표자료 (PDF)](https://drive.google.com/file/d/1dJ06D2cL6q1QrYOArYt7W14viXYzSgxI/view?usp=sharing)
+📑 [발표자료 (PDF)](https://drive.google.com/file/d/12nr3GqoO5BXNRbhyx28RbISpmGPAfvhq/view?usp=sharing)
 
 🔗 [Backend 저장소 (apolo-server)](https://github.com/APolo-SMWU/apolo-server)
 
