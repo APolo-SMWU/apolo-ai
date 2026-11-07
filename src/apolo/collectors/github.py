@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote, unquote, urlparse
 
-import httpx    # GitHub API 요청
+import httpx  # GitHub API 요청
 from dotenv import load_dotenv
 
 from apolo.collectors.github_selection import (
@@ -377,7 +377,9 @@ async def collect_repository_file(
 def _decode_repository_file(payload: object, entry: GitHubTreeEntry) -> str:
     """Git blob Base64 원문의 크기·형식 검증"""
     if not isinstance(payload, Mapping):
-        raise GitHubCollectionError("invalid_response", "GitHub Blob 응답 형식이 올바르지 않습니다.")
+        raise GitHubCollectionError(
+            "invalid_response", "GitHub Blob 응답 형식이 올바르지 않습니다."
+        )
     size = payload.get("size")
     encoded = payload.get("content")
     if (
@@ -388,7 +390,9 @@ def _decode_repository_file(payload: object, entry: GitHubTreeEntry) -> str:
         or size < 0
         or not isinstance(encoded, str)
     ):
-        raise GitHubCollectionError("invalid_response", "GitHub Blob 응답 형식이 올바르지 않습니다.")
+        raise GitHubCollectionError(
+            "invalid_response", "GitHub Blob 응답 형식이 올바르지 않습니다."
+        )
     if size > MAX_SELECTED_FILE_BYTES:
         raise GitHubCollectionError(
             "file_too_large", f"선택 파일은 {MAX_SELECTED_FILE_BYTES} bytes 이하만 수집합니다."
@@ -396,7 +400,9 @@ def _decode_repository_file(payload: object, entry: GitHubTreeEntry) -> str:
     try:
         decoded = base64.b64decode("".join(encoded.split()), validate=True)
     except ValueError as error:
-        raise GitHubCollectionError("invalid_response", "GitHub Blob의 Base64가 올바르지 않습니다.") from error
+        raise GitHubCollectionError(
+            "invalid_response", "GitHub Blob의 Base64가 올바르지 않습니다."
+        ) from error
     if len(decoded) != size or len(decoded) != entry.size:
         raise GitHubCollectionError("invalid_response", "GitHub Blob 크기가 파일 목록과 다릅니다.")
     if any(byte < 32 and byte not in (9, 10, 13) for byte in decoded) or 127 in decoded:
@@ -404,7 +410,9 @@ def _decode_repository_file(payload: object, entry: GitHubTreeEntry) -> str:
     try:
         return decoded.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise GitHubCollectionError("unsupported_content", "UTF-8 텍스트 파일만 읽습니다.") from error
+        raise GitHubCollectionError(
+            "unsupported_content", "UTF-8 텍스트 파일만 읽습니다."
+        ) from error
 
 
 def _normalize_repository_tree(

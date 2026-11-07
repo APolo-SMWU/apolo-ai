@@ -1,9 +1,9 @@
 """Block별 검증기가 공유하는 KG 조회·값 변환 도구"""
 
-import re
 from uuid import UUID
 
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
+from apolo.dates import PRESENT, date_rank, iso_to_output
 
 
 def item_entity_id(value: str) -> UUID | None:
@@ -53,7 +53,7 @@ def date_values(facts) -> dict[str, set[str]]:
 
     return {
         predicate: {
-            format_output_date(fact.value)
+            iso_to_output(fact.value) or fact.value
             for fact in facts
             if fact.predicate == predicate and isinstance(fact.value, str)
         }
@@ -67,28 +67,9 @@ def has_current_fact(facts) -> bool:
     return any(fact.predicate == "isCurrent" and fact.value is True for fact in facts)
 
 
-def format_output_date(value: str) -> str:
-    """KG의 ISO 날짜를 Block 출력 형식(YYYY 또는 YYYY.MM)으로 변환한다"""
-
-    match = re.fullmatch(r"(\d{4})(?:-(\d{2}))?(?:-\d{2})?", value)
-    if match is None:
-        return value
-    year, month = match.groups()
-    return f"{year}.{month}" if month else year
-
-
 def has_inverted_period(start: str | None, end: str | None) -> bool:
     """확인된 시작일이 종료일보다 뒤인지 확인한다"""
 
-    if not start or not end or end == "Present":
+    if not start or not end or end == PRESENT:
         return False
-    start_year, start_month = _period_key(start, default_month=1)
-    end_year, end_month = _period_key(end, default_month=12)
-    return (start_year, start_month) > (end_year, end_month)
-
-
-def _period_key(value: str, *, default_month: int) -> tuple[int, int]:
-    """YYYY·YYYY.MM 문자열을 비교용 연·월로 변환한다"""
-
-    year, _, month = value.partition(".")
-    return int(year), int(month) if month else default_month
+    return date_rank(start, default_month=1) > date_rank(end, default_month=12)

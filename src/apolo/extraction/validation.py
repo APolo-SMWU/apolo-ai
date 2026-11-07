@@ -1,6 +1,5 @@
 """LLM 추출 후보를 온톨로지 기준으로 항목별 검증한다. 틀린 항목만 제외하고 이유를 남긴다."""
 
-import re
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -15,6 +14,7 @@ from apolo.contracts.extraction import (
     FactCandidate,
     RelationCandidate,
 )
+from apolo.dates import normalize_date
 from apolo.ontology.personal import (
     MULTI_VALUED_PROPERTIES,
     PROPERTY_TYPES,
@@ -22,14 +22,6 @@ from apolo.ontology.personal import (
     RELATION_PAIRS,
 )
 from apolo.ontology.values import is_valid_value
-
-# 구분자만 다른 날짜 표기(2024.3, 2024/03/05, 2024년 3월 등). 네 자리 연도와 구분자가 있어야 한다.
-_DATE_NOTATION = re.compile(
-    r"([0-9]{4})"
-    r"(?:\s*(?:년|[./-])\s*([0-9]{1,2})"
-    r"(?:\s*(?:월|[./-])\s*([0-9]{1,2}))?)?"
-    r"\s*(?:년|월|일|\.)?"
-)
 
 # Entity가 무엇인지 알려 주는 속성. 보류된 값도 인정한다.
 _IDENTITY_PREDICATES = {
@@ -298,15 +290,6 @@ def _check_fact(
         report("INVALID_PROPERTY_VALUE", path, "허용된 값 목록에 없습니다.")
         return None
     return fact.model_copy(update={"value": value})
-
-
-def normalize_date(value: str) -> str:
-    """표기만 다른 날짜를 ISO로 맞춘다. 맞지 않으면 그대로 두어 형식 검사에서 제외된다."""
-    match = _DATE_NOTATION.fullmatch(value.strip())
-    if match is None:
-        return value
-    year, month, day = match.groups()
-    return "-".join([year] + [f"{int(part):02d}" for part in (month, day) if part])
 
 
 def _is_valid_relation(

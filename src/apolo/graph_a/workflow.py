@@ -13,6 +13,7 @@ def process_sources_node(state: GraphAState) -> dict[str, object]:
         state["graph_id"],
         state["collection"],
         state["extractor"],
+        max_workers=state["max_workers"],
         now=state["now"],
         linker=state.get("linker"),
     )

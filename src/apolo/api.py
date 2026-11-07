@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -85,33 +86,19 @@ async def _generate(request: GenerateRequest) -> GenerateResponse:
             if request.my_page_profile.github:
                 source_urls.append(request.my_page_profile.github)
 
-            warnings: list[GenerateWarning] = []
-            source_keys: frozenset[str] = frozenset()
+            graph_a_result = GraphAResult([])
             if source_urls or request.attachments:
                 graph_a_result = await _run_graph_a(
                     connection, seed.id, source_urls, attachments=request.attachments
                 )
-                warnings.extend(graph_a_result.warnings)
-                source_keys = graph_a_result.source_keys
 
-            # LLM 호출 동안 다른 요청을 막지 않도록 스레드에서 실행
-            graph_b_result, graph_b_warnings = await run_in_threadpool(
-                _run_graph_b,
-                connection,
-                request.user_id,
-                request.requirements,
-                source_keys=source_keys,
+            def profile_only() -> GenerateResponse:
+                latest_seed = load_seed_by_user_id(connection, request.user_id) or seed
+                return build_profile_only_response(latest_seed)
+
+            response = await _graph_b_response(
+                connection, request.user_id, request.requirements, graph_a_result, profile_only
             )
-            warnings.extend(graph_b_warnings)
-            if graph_b_result is not None:
-                response = build_graph_b_response(graph_b_result)
-                await _attach_work_images(connection, response, graph_b_result)
-            else:
-                latest_seed = load_seed_by_user_id(connection, request.user_id)
-                if latest_seed is None:
-                    latest_seed = seed
-                response = build_profile_only_response(latest_seed)
-            response.warnings.extend(warnings)
         return response
     except Exception as error:
         logger.error("프로필 기반 생성 실패: %s", type(error).__name__)
@@ -130,12 +117,10 @@ async def _update_content(request: UpdateContentRequest) -> GenerateResponse:
         with connect_db() as connection:
             seed = load_seed_by_user_id(connection, request.user_id)
             if seed is None:
-                return GenerateResponse(
-                    blocks=[],
-                    meta=GenerateMeta(
-                        ontology_schema_version=ONTOLOGY_VERSION, knowledge_graph_version=0
-                    ),
-                    warnings=[
+                return _empty_response(
+                    ONTOLOGY_VERSION,
+                    0,
+                    [
                         GenerateWarning(
                             code="UPDATE_CONTENT_KG_NOT_FOUND",
                             message="사용자의 기존 Knowledge Graph를 찾지 못했습니다.",
@@ -146,29 +131,14 @@ async def _update_content(request: UpdateContentRequest) -> GenerateResponse:
             graph_a_result = await _run_graph_a(
                 connection, seed.id, request.source_links, attachments=request.attachments
             )
-            warnings = list(graph_a_result.warnings)
-            graph_b_result, graph_b_warnings = await run_in_threadpool(
-                _run_graph_b,
-                connection,
-                request.user_id,
-                request.requirements,
-                source_keys=graph_a_result.source_keys,
-            )
-            warnings.extend(graph_b_warnings)
-            if graph_b_result is not None:
-                response = build_graph_b_response(graph_b_result)
-                await _attach_work_images(connection, response, graph_b_result)
-            else:
+
+            def empty() -> GenerateResponse:
                 latest_seed = load_seed_by_user_id(connection, request.user_id) or seed
-                response = GenerateResponse(
-                    blocks=[],
-                    meta=GenerateMeta(
-                        ontology_schema_version=latest_seed.ontology_schema_version,
-                        knowledge_graph_version=latest_seed.version,
-                    ),
-                )
-            response.warnings.extend(warnings)
-            return response
+                return _empty_response(latest_seed.ontology_schema_version, latest_seed.version)
+
+            return await _graph_b_response(
+                connection, request.user_id, request.requirements, graph_a_result, empty
+            )
     except Exception:
         logger.error("Source 갱신 실패", exc_info=True)
         raise HTTPException(status_code=500, detail="콘텐츠 갱신 중 오류가 발생했습니다.") from None
@@ -223,6 +193,39 @@ def _empty_cv_response(version: int, code: str, message: str) -> CvGenerateRespo
     )
 
 
+def _empty_response(
+    schema_version: str, kg_version: int, warnings: list[GenerateWarning] | None = None
+) -> GenerateResponse:
+    return GenerateResponse(
+        blocks=[],
+        meta=GenerateMeta(
+            ontology_schema_version=schema_version, knowledge_graph_version=kg_version
+        ),
+        warnings=warnings or [],
+    )
+
+
+async def _graph_b_response(
+    connection,
+    user_id: int,
+    requirements: str,
+    graph_a_result: GraphAResult,
+    fallback: Callable[[], GenerateResponse],
+) -> GenerateResponse:
+    """Graph B 결과로 응답을 만들고, 실패하면 fallback 응답에 경고만 붙인다"""
+    # LLM 호출 동안 다른 요청을 막지 않도록 스레드에서 실행
+    graph_b_result, graph_b_warnings = await run_in_threadpool(
+        _run_graph_b, connection, user_id, requirements, graph_a_result.source_keys
+    )
+    if graph_b_result is not None:
+        response = build_graph_b_response(graph_b_result)
+        await _attach_work_images(connection, response, graph_b_result)
+    else:
+        response = fallback()
+    response.warnings.extend([*graph_a_result.warnings, *graph_b_warnings])
+    return response
+
+
 async def _run_graph_a(
     connection,
     graph_id,
@@ -246,6 +249,7 @@ async def _run_graph_a(
             return GraphAResult(
                 [_collection_warning(item) for item in collection.warnings], source_keys
             )
+        llm_settings, langsmith_settings = load_llm_settings(), load_langsmith_settings()
         graph = build_graph_a()
         state = await run_in_threadpool(
             graph.invoke,
@@ -253,14 +257,9 @@ async def _run_graph_a(
                 "connection": connection,
                 "graph_id": graph_id,
                 "collection": collection,
-                "extractor": OpenAIExtractionClient(
-                    load_llm_settings(),
-                    load_langsmith_settings(),
-                ),
-                "linker": OpenAIWorkLinkingClient(
-                    load_llm_settings(),
-                    load_langsmith_settings(),
-                ),
+                "extractor": OpenAIExtractionClient(llm_settings, langsmith_settings),
+                "linker": OpenAIWorkLinkingClient(llm_settings, langsmith_settings),
+                "max_workers": llm_settings.max_parallel_extractions,
                 "now": datetime.now(UTC),
                 "result": None,
             },
@@ -311,20 +310,13 @@ def _run_graph_b(
     connection,
     user_id: int,
     requirements: str,
-    *,
-    source_keys: frozenset[str] | None = None,
+    source_keys: frozenset[str],
 ) -> tuple[GraphBGenerationResult | None, list[GenerateWarning]]:
     """현재 요청 Source 범위의 KG에서 Graph B를 실행하고 API 경고로 변환"""
     try:
-        if source_keys is None:
-            graph_b_input = load_graph_b_input(connection, user_id, requirements)
-        else:
-            graph_b_input = load_graph_b_input(
-                connection,
-                user_id,
-                requirements,
-                source_keys=source_keys,
-            )
+        graph_b_input = load_graph_b_input(
+            connection, user_id, requirements, source_keys=source_keys
+        )
         if graph_b_input is None:
             return None, [
                 GenerateWarning(

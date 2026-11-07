@@ -2,11 +2,11 @@
 
 from apolo.contracts.generate import AwardItem, CertificationItem
 from apolo.contracts.knowledge import ActiveKnowledgeGraph
+from apolo.dates import iso_to_output
 from apolo.graph_b.validation_types import ContentValidationIssue
 from apolo.graph_b.validators.common import (
     entity_facts,
     fact_values,
-    format_output_date,
     item_entity_id,
 )
 
@@ -84,7 +84,7 @@ def _validate_credential_item(
 
     if item.date is not None:
         supported_dates = {
-            format_output_date(fact.value)
+            iso_to_output(fact.value) or fact.value
             for fact in facts
             if fact.predicate == "date" and isinstance(fact.value, str)
         }

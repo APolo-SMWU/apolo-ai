@@ -13,6 +13,7 @@ from pydantic import (
 
 from apolo.contracts.attachment import MAX_ATTACHMENTS, SourceAttachment
 from apolo.contracts.profile import SeedProfileInput
+from apolo.dates import OUTPUT_DATE, PRESENT
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)]
@@ -69,12 +70,12 @@ TimelineItemKind = Literal[
 
 
 # 빈 문자열은 날짜 미입력이다. 실제 값은 Backend의 날짜 형식과 맞춘다
-TimelineDate = Annotated[str, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?)?$")]
-TimelineEndDate = Annotated[str, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)?$")]
+TimelineDate = Annotated[str, Field(pattern=rf"^(?:{OUTPUT_DATE})?$")]
+TimelineEndDate = Annotated[str, Field(pattern=rf"^(?:{OUTPUT_DATE}|{PRESENT})?$")]
 
-EducationDate = Annotated[str | None, Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")]
+EducationDate = Annotated[str | None, Field(pattern=rf"^{OUTPUT_DATE}$")]
 EducationEndDate = Annotated[
-    str | None, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
+    str | None, Field(pattern=rf"^(?:{OUTPUT_DATE}|{PRESENT})$")
 ]
 
 
@@ -105,9 +106,9 @@ class EducationBlock(_ResponseModel):
     items: list[EducationItem]
 
 
-ExperienceDate = Annotated[str | None, Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$")]
+ExperienceDate = Annotated[str | None, Field(pattern=rf"^{OUTPUT_DATE}$")]
 ExperienceEndDate = Annotated[
-    str | None, Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$")
+    str | None, Field(pattern=rf"^(?:{OUTPUT_DATE}|{PRESENT})$")
 ]
 ExperienceItemKind = Literal["fulltime", "contract", "intern", "research"]
 
@@ -141,11 +142,11 @@ class ExperienceBlock(_ResponseModel):
 
 ActivityDate = Annotated[
     str | None,
-    Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$"),
+    Field(pattern=rf"^{OUTPUT_DATE}$"),
 ]
 ActivityEndDate = Annotated[
     str | None,
-    Field(pattern=r"^(?:[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?|Present)$"),
+    Field(pattern=rf"^(?:{OUTPUT_DATE}|{PRESENT})$"),
 ]
 ActivityItemKind = Literal["club", "volunteer", "program", "talk"]
 
@@ -196,7 +197,7 @@ class TimelineBlock(_ResponseModel):
 
 CredentialDate = Annotated[
     str | None,
-    Field(pattern=r"^[0-9]{4}(?:\.(?:0[1-9]|1[0-2]))?$"),
+    Field(pattern=rf"^{OUTPUT_DATE}$"),
 ]
 
 

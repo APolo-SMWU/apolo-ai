@@ -1,70 +1,193 @@
 # APolo AI
 
-APolo의 AI 서비스. GitHub, Public Notion Page, 사용자 프로필(`myPageProfile`)에 흩어진 개인 정보를 Personal Ontology 기반 Personal Knowledge Graph로 구조화하고, 온라인 명함·포트폴리오·CV 콘텐츠 생성에 재사용하는 것을 목표로 한다.
+[![code](https://img.shields.io/badge/Code-Python%203.12-blue)]()
+[![framework](https://img.shields.io/badge/Framework-FastAPI-009688)]()
+[![db](https://img.shields.io/badge/DB-PostgreSQL-336791)]()
+[![cloud](https://img.shields.io/badge/Deploy-AWS%20Lightsail-FF9900)]()
 
-AI 처리는 두 가지 LangGraph workflow로 구성된다.
+> **APolo (Personal Online Link Organizer)** — 온톨로지 기반 온라인 명함 웹사이트의 AI 서비스
 
-- **Graph A:** 소스 수집 → 추출·정규화 → Entity / Fact / Relation / Evidence 생성 → KG 저장·갱신
-- **Graph B:** KG에서 목적에 맞는 정보 선별 → 콘텐츠 생성 → 검증 → JSON 반환
+📑 [발표자료 (PDF)](https://drive.google.com/file/d/1dJ06D2cL6q1QrYOArYt7W14viXYzSgxI/view?usp=sharing)
 
-콘텐츠 생성·갱신 시 Backend(Express)가 별도 AI 서버(FastAPI)를 내부 API로 호출한다. Frontend는 AI 서버를 직접 호출하지 않으며, Backend가 AI 결과를 검증하고 최종 콘텐츠를 저장한다.
+🔗 [Backend 저장소 (apolo-server)](https://github.com/APolo-SMWU/apolo-server)
 
-## 브랜치 설명
+## Description
 
-| 순서 | 브랜치 | 주요 기능 |
+개인의 활동 기록은 GitHub · Notion · 블로그에 흩어져 있고, 명함·포트폴리오·CV처럼 목적이 바뀔 때마다 같은 경험을 다시 정리해야 합니다.
+APolo는 흩어진 정보를 **개인 지식 그래프(Personal Knowledge Graph)** 하나로 모으고, 그 그래프에서 필요한 형태의 결과물을 만들어 냅니다.
+
+이 저장소는 APolo의 AI 서버입니다. GitHub, Public Notion Page, 첨부 문서(PDF·DOCX), 사용자 프로필을 수집해 Personal Ontology 기반 KG로 구조화하고, KG에서 포트폴리오·CV 콘텐츠를 생성합니다.
+
+| 기존 방식 | APolo |
+|---|---|
+| GitHub · Notion · SNS에 정보가 따로 흩어져 있음 | 개인 지식 그래프 하나로 정보를 통합 |
+| 같은 경험을 문서마다 다시 작성 | 한 번의 입력으로 명함 · 포트폴리오 · CV를 함께 생성 |
+| 정보가 바뀌면 각 문서를 일일이 수정 | 버튼 하나로 한 번에 갱신하고 출처 · 근거까지 연결 |
+
+MVP User: 컴퓨터공학 관련 대학생 · 교수 · 현직자
+
+## Main Feature
+
+### 소스 수집
+- GitHub 프로필·저장소, Public Notion Page, 첨부 PDF·DOCX를 수집해 Source · Snapshot으로 저장
+- 내용 해시로 변경 여부를 판단해, 바뀐 소스만 다시 처리
+
+### Graph A — 지식 그래프 구축
+- LLM으로 소스에서 사실 후보를 추출하고 온톨로지 규칙으로 검증
+- 같은 대상(프로젝트·기관·기술 등)을 하나의 Entity로 연결·병합해 KG에 저장
+- 모든 Fact에 Source · Evidence를 함께 보존해 출처를 추적
+
+### Graph B — 콘텐츠 생성
+- 요구사항에 맞는 정보를 KG에서 선별해 포트폴리오 블록(소개 · 학력 · 경력 · 프로젝트 · 스킬 등) 생성
+- 근거 · 형식 검증을 거쳐 Backend가 바로 저장할 수 있는 JSON으로 반환
+- 같은 KG에서 CV 콘텐츠를 별도 API로 생성
+
+### 콘텐츠 갱신 (UPDATE CONTENT)
+- 원본 소스를 다시 수집해 변경분만 KG에 반영(수정 · 삭제)
+- 바뀐 KG로 콘텐츠를 다시 생성
+
+## System Architecture
+
+```mermaid
+flowchart LR
+    U[사용자] --> FE[Frontend<br/>React · Vite]
+    FE -->|REST · multipart| BE[Backend<br/>Node · Express]
+    BE -->|/generate · /update-content · /generate-cv| AI[AI Server<br/>FastAPI]
+
+    subgraph AI Server
+        C[Source 수집<br/>GitHub · Notion · PDF · DOCX] --> GA[Graph A<br/>추출 · 연결 · 검증]
+        GA --> KG[(Personal KG<br/>PostgreSQL ai schema)]
+        KG --> GB[Graph B<br/>선별 · 생성 · 검증]
+    end
+
+    AI --> LLM[OpenAI]
+    AI -.trace.-> LS[LangSmith]
+    GB -->|블록 JSON| BE
+    BE --> S3[(S3 · PostgreSQL<br/>public schema)]
+```
+
+- Frontend는 AI 서버를 직접 호출하지 않습니다. Backend가 AI 결과를 검증하고 최종 콘텐츠를 저장합니다.
+- AI와 Backend는 같은 PostgreSQL을 쓰되, AI는 `ai` 스키마, Backend는 `public` 스키마를 사용합니다.
+
+## Knowledge Graph
+
+Personal Ontology v2.1 — 9개 클래스와 9개 관계로 사용자 정보를 표현합니다.
+
+| 클래스 | 의미 |
+|---|---|
+| `Person` | 사용자 본인 |
+| `Education` | 학력 |
+| `Experience` | 경력 |
+| `Activity` | 활동 |
+| `Work` | 프로젝트 · 결과물 |
+| `Credential` | 수상 · 자격 |
+| `Skill` | 기술 · 역량 |
+| `Organization` | 학교 · 회사 · 기관 |
+| `Channel` | 이메일 · GitHub 등 연락 채널 |
+
+```mermaid
+flowchart LR
+    P[Person] -->|hasEducation| ED[Education]
+    P -->|hasExperience| EX[Experience]
+    P -->|participatedIn| AC[Activity]
+    P -->|participatedIn| W[Work]
+    P -->|holds| CR[Credential]
+    P -->|hasSkill| SK[Skill]
+    P -->|hasChannel| CH[Channel]
+    ED & EX & AC -->|atOrganization| O[Organization]
+    W -->|usesSkill| SK
+    W -->|partOf| EX
+```
+
+**근거 레이어(Provenance):** 각 Fact마다 Source · Evidence를 함께 보존합니다. "React 사용 가능"이라는 정보에서 나아가, 어떤 프로젝트에서 사용했는지와 그 근거까지 연결합니다.
+
+## API
+
+| Method | Path | 설명 |
 |---|---|---|
-| 1 | `feat/profile-seed-kg` | 프로필·KG 모델과 온톨로지 규칙, Seed 변환·검증, DB 저장·조회·중복 처리·프로필 수정 반영 |
-| 2 | `feat/generate-portfolio` | 프로필 Seed → 학력·경력 블록 → `/generate` → Backend 연결 |
-| 3 | `feat/source-collection` | Source·Snapshot·Evidence 저장 구조, GitHub·Public Notion 수집 |
-| 4 | `feat/knowledge-construction` | LLM·LangSmith 연결, 사실 후보 추출·검증·병합·KG 저장, 요구사항 속 사용자 사실 처리, Graph A 연결 |
-| 5 | `feat/content-generation` | KG 정보 선별, 콘텐츠 생성·근거·형식 검증, Graph B 연결 |
-| 6 | `feat/update-content` | Source 변경 감지, KG 수정·삭제 반영, 콘텐츠 갱신·사용자 편집 보호, Backend 연결 |
-| 7 | `chore/deploy-ai` | 통합 평가·배포 전 점검, Lightsail 배포 설정 |
+| GET | `/health` | 상태 확인 |
+| POST | `/generate` | 프로필 · 링크 · 첨부로 KG 구축 후 포트폴리오 콘텐츠 생성 |
+| POST | `/update-content` | 소스 재수집 · 변경 반영 후 콘텐츠 갱신 |
+| POST | `/generate-cv` | KG 기반 CV 콘텐츠 생성 |
 
-### UPDATE CONTENT 연결 시 필수 정리
+모든 API는 Backend만 내부적으로 호출합니다.
 
-- Backend의 기존 `fetchSourceUpdates()`가 담당하는 외부 수집·해시 비교·스냅샷 관리를 AI로 이전한다. 두 서버에서 중복 수행하지 않는다.
-- Backend는 소유권 확인, 링크·갱신 요청 전달, 생성 결과 저장을 담당한다.
-- Backend의 `Portfolio.sourceSnapshots` 필드는 프론트 사용처와 응답 호환성을 확인한 뒤 유지·제거 여부를 조율한다. 임의로 삭제하지 않는다.
-- 완료 기준: 갱신 요청에서 AI만 수집·변경 감지를 수행하고, Backend 연결 및 기존 프론트 응답 호환성을 검증한다.
+## Getting Started
 
-## 개발 환경
+### 요구 사항
+- Python 3.12 이상
+- [uv](https://docs.astral.sh/uv/)
+- PostgreSQL (`ai` 스키마 CREATE 권한)
 
-- Python 3.12 이상 (`.python-version`: 3.12)
-- 의존성 관리: uv (`pyproject.toml`, `uv.lock`)
-- 기본 의존성: FastAPI, Uvicorn, Pydantic, LangGraph, python-dotenv
-- 개발 도구: pytest, Ruff
-- 패키지 위치: `src/apolo`, 테스트 위치: `tests`
-
+### 설치 · 환경 변수
 ```bash
 uv sync --locked
-uv run ruff check src tests
-uv run pytest
+cp .env.example .env
 ```
 
-## PDF·Word 첨부 연결
+`.env`에 DB 접속 정보(`AI_DB_*`), `OPENAI_API_KEY`를 입력합니다. `GITHUB_TOKEN`, LangSmith 설정은 선택입니다.
+모델·타임아웃·동시 추출 수는 `APOLO_*`로 조정할 수 있습니다(선택).
 
-Backend의 `POST /portfolios/generate`는 기존 multipart `attachments` 필드로 PDF·DOCX를 받는다.
-최대 5개, 파일당 10MB이며 PDF는 텍스트가 있는 문서 30쪽까지 지원한다(OCR 미지원).
-링크 없이 문서만 첨부한 생성도 지원한다. JPG·PNG는 기존처럼 첨부로 저장하며 AI에서 읽지 않는다.
+### DB 초기화
+처음 설치할 때 아래 순서로 실행합니다.
 
-Backend는 원본을 비공개 S3에 저장한 뒤 `/generate`와 `/update-content`에 아래 참조를 전달한다.
-`attachments` 생략·빈 목록은 기존 JSON 요청과 호환된다.
-
-```json
-{
-  "attachments": [{
-    "fileName": "resume.docx",
-    "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "sourceUrl": "portfolios/요청UUID/attachments/파일UUID.docx",
-    "downloadUrl": "https://버킷.s3.ap-northeast-2.amazonaws.com/저장키?서명"
-  }]
-}
+```bash
+uv run python -m apolo.db.migrate 001
+uv run python -m apolo.db.migrate 002
+uv run python -m apolo.db.migrate 003
+uv run python -m apolo.db.migrate 004
+uv run python -m apolo.db.migrate 005
+uv run python -m apolo.db.migrate 006
+uv run python -m apolo.db.migrate 007
+uv run python -m apolo.db.migrate 008
+uv run python -m apolo.db.migrate 009
 ```
 
-AI는 S3 원본을 크기 제한 안에서 내려받아 수집·항목별 분할·Graph A 저장을 수행하고,
-이번 요청의 파일 Source를 Graph B 입력에 포함한다. 임시 다운로드 주소는 DB에 저장하지 않는다.
-첨부 수집 실패는 파일명과 오류 코드로 경고하며 다른 소스 처리는 계속한다.
+이미 쓰던 DB는 적용하지 않은 번호만 순서대로 실행합니다.
 
-기존 008까지 적용된 DB에는 서비스 실행 전 `uv run python -m apolo.db.migrate_file_source`를
-실행한다. `APOLO_TEST_DB=1 uv run pytest -q`는 실제 DB 통합 검증 후 테스트 변경을 롤백한다.
+### 실행
+```bash
+uv run uvicorn apolo.api:app --reload
+```
+
+### 검사
+```bash
+uv run ruff check src
+```
+
+### 배포
+`main`에 병합되면 GitHub Actions가 CI를 통과한 뒤 SSH로 AWS Lightsail 서버의 배포 스크립트를 실행합니다(Nginx · PM2).
+
+## Project Structure
+
+```
+apolo-ai
+├── src/apolo/
+│   ├── api.py               # FastAPI 엔드포인트
+│   ├── contracts/           # 요청 · 응답 · KG 데이터 계약 (Pydantic)
+│   ├── ontology/            # Personal Ontology 클래스 · 관계 · 값 규칙
+│   ├── seed/                # 프로필 → Seed KG 변환 · 검증 · 반영
+│   ├── collectors/          # GitHub · Notion · PDF · DOCX 수집
+│   ├── extraction/          # 사실 후보 추출 · 검증 · Entity 연결 · 병합
+│   ├── graph_a/             # Graph A workflow (수집 → KG 구축)
+│   ├── content_selection/   # KG에서 콘텐츠용 정보 선별
+│   ├── graph_b/             # Graph B 생성 · 정규화 · 검증
+│   ├── cv/                  # CV 콘텐츠 생성
+│   ├── llm/                 # LLM 클라이언트 · 모델 설정
+│   └── db/                  # 스키마 SQL · 마이그레이션 · 저장 · 조회
+├── evals/                   # 평가 케이스 · LangSmith 연동
+└── .github/workflows/       # CI · 자동 배포
+```
+
+## Tech Stack
+
+| 구분 | 기술 |
+|---|---|
+| Language | Python 3.12 |
+| API | FastAPI, Uvicorn, Pydantic |
+| AI Workflow | OpenAI (gpt-6-luna), LangGraph (Graph A) |
+| Monitoring | LangSmith |
+| Database | PostgreSQL (psycopg) |
+| Document | pdfplumber, python-docx |
+| Deploy | AWS Lightsail, Nginx, PM2, GitHub Actions |
+| Dev Tools | uv, Ruff, pytest |
