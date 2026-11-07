@@ -15,6 +15,7 @@ from apolo.extraction.entity_linking import (
     LinkedClass,
     summary_from_facts,
 )
+from apolo.extraction.linking import representative_snippet
 from apolo.extraction.resolution import (
     EntityResolution,
     ExistingEntity,
@@ -22,7 +23,7 @@ from apolo.extraction.resolution import (
     candidate_strong_keys,
     resolve_existing_entities,
 )
-from apolo.extraction.work_linking import WorkSummary, representative_snippet
+from apolo.extraction.work_linking import WorkSummary
 from apolo.ontology.values import is_valid_value
 
 

@@ -29,7 +29,13 @@ from apolo.extraction.entity_linking import (
     entities_compatible,
     new_entity_summaries,
 )
-from apolo.extraction.work_linking import WorkSummary, accepted_links, new_work_summaries
+from apolo.extraction.linking import accepted_links
+from apolo.extraction.work_linking import (
+    MIN_LINK_CONFIDENCE,
+    WorkSummary,
+    new_work_summaries,
+    works_compatible,
+)
 from apolo.llm.config import load_llm_settings
 from apolo.source_collection import StoredPublicCollection
 
@@ -237,7 +243,13 @@ def _linking_jobs(
 def _judge_works(
     linker: Linker, works: list[WorkSummary], existing_ids: dict[str, UUID]
 ) -> dict[str, UUID]:
-    return accepted_links(linker.link(works), works, existing_ids)
+    return accepted_links(
+        linker.link(works),
+        works,
+        existing_ids,
+        min_confidence=MIN_LINK_CONFIDENCE,
+        compatible=works_compatible,
+    )
 
 
 def _judge_entities(

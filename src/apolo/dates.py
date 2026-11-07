@@ -55,6 +55,31 @@ def _short_year_parts(text: str, today: date) -> tuple[str | None, str | None, s
     return str(year), month, day
 
 
+def iso_periods_overlap(periods: list[tuple[str | None, str | None]]) -> bool:
+    """ISO 기간들이 서로 겹치는지. 시작일이 있는 것끼리만 비교하고 끝이 없으면 진행 중으로 본다"""
+    ranges = [(start, end or "9999") for start, end in periods if start]
+    return all(
+        _iso_not_after(a_start, b_end) and _iso_not_after(b_start, a_end)
+        for index, (a_start, a_end) in enumerate(ranges)
+        for b_start, b_end in ranges[index + 1 :]
+    )
+
+
+def iso_dates_compatible(dates: list[str]) -> bool:
+    """정밀도가 다른 날짜(2024, 2024-12, 2024-12-13)는 앞부분이 같으면 같은 날로 본다"""
+    return all(
+        a.startswith(b) or b.startswith(a)
+        for index, a in enumerate(dates)
+        for b in dates[index + 1 :]
+    )
+
+
+def _iso_not_after(left: str, right: str) -> bool:
+    """정밀도가 다른 ISO 날짜는 짧은 쪽 길이로 비교한다"""
+    length = min(len(left), len(right))
+    return left[:length] <= right[:length]
+
+
 def iso_to_output(value: str | None) -> str | None:
     """KG의 ISO 날짜를 출력 형식(YYYY·YYYY.MM)으로 바꾼다. ISO가 아니면 None"""
     match = _ISO.fullmatch(value or "")

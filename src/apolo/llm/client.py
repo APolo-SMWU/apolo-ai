@@ -14,12 +14,9 @@ from apolo.extraction.entity_linking import (
     LinkedClass,
     build_entity_linking_prompt,
 )
+from apolo.extraction.linking import LinkingResult
 from apolo.extraction.prompt import build_extraction_prompt
-from apolo.extraction.work_linking import (
-    WorkLinkingResult,
-    WorkSummary,
-    build_work_linking_prompt,
-)
+from apolo.extraction.work_linking import WorkSummary, build_work_linking_prompt
 from apolo.llm.config import LangSmithSettings, LlmSettings
 
 
@@ -129,20 +126,20 @@ class OpenAIWorkLinkingClient(StructuredOutputClient):
             responses=responses,
         )
 
-    def link(self, works: list[WorkSummary]) -> WorkLinkingResult:
+    def link(self, works: list[WorkSummary]) -> LinkingResult:
         return self._judge(*build_work_linking_prompt(works))
 
     def link_entities(
         self, class_type: LinkedClass, summaries: list[EntitySummary]
-    ) -> WorkLinkingResult:
+    ) -> LinkingResult:
         return self._judge(*build_entity_linking_prompt(class_type, summaries))
 
-    def _judge(self, system: str, user: str) -> WorkLinkingResult:
+    def _judge(self, system: str, user: str) -> LinkingResult:
         return self._call(
             system,
             user,
             name="work_linking_result",
-            schema=WorkLinkingResult.model_json_schema(),
-            output_type=WorkLinkingResult,
+            schema=LinkingResult.model_json_schema(),
+            output_type=LinkingResult,
             label="병합 판정",
         )
