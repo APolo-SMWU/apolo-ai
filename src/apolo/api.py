@@ -249,6 +249,7 @@ async def _run_graph_a(
             return GraphAResult(
                 [_collection_warning(item) for item in collection.warnings], source_keys
             )
+        llm_settings, langsmith_settings = load_llm_settings(), load_langsmith_settings()
         graph = build_graph_a()
         state = await run_in_threadpool(
             graph.invoke,
@@ -256,14 +257,9 @@ async def _run_graph_a(
                 "connection": connection,
                 "graph_id": graph_id,
                 "collection": collection,
-                "extractor": OpenAIExtractionClient(
-                    load_llm_settings(),
-                    load_langsmith_settings(),
-                ),
-                "linker": OpenAIWorkLinkingClient(
-                    load_llm_settings(),
-                    load_langsmith_settings(),
-                ),
+                "extractor": OpenAIExtractionClient(llm_settings, langsmith_settings),
+                "linker": OpenAIWorkLinkingClient(llm_settings, langsmith_settings),
+                "max_workers": llm_settings.max_parallel_extractions,
                 "now": datetime.now(UTC),
                 "result": None,
             },

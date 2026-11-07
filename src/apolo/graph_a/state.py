@@ -19,5 +19,6 @@ class GraphAState(TypedDict):
     collection: StoredPublicCollection
     extractor: CandidateExtractor
     linker: NotRequired[Linker | None]
+    max_workers: int
     now: datetime | None
     result: GraphAProcessingResult | None

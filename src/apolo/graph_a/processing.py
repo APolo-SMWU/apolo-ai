@@ -36,7 +36,6 @@ from apolo.extraction.work_linking import (
     new_work_summaries,
     works_compatible,
 )
-from apolo.llm.config import load_llm_settings
 from apolo.source_collection import StoredPublicCollection
 
 logger = logging.getLogger(__name__)
@@ -71,6 +70,7 @@ def process_pending_sources(
     collection: StoredPublicCollection,
     extractor: CandidateExtractor,
     *,
+    max_workers: int,
     now: datetime | None = None,
     linker: Linker | None = None,
 ) -> GraphAProcessingResult:
@@ -84,9 +84,7 @@ def process_pending_sources(
     pending = collection.sources_needing_extraction()
     if pending:
         chunks = [split_source(source) for source, _ in pending]
-        worker_count = min(
-            load_llm_settings().max_parallel_extractions, sum(len(parts) for parts in chunks)
-        )
+        worker_count = min(max_workers, sum(len(parts) for parts in chunks))
         extracted: list[
             tuple[int, CollectedSource, PersistedCollectedSource, ExtractionResult]
         ] = []
